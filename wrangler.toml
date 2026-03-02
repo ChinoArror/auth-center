@@ -1,0 +1,25 @@
+name = "sso-analytics-worker"
+main = "src/index.ts"
+compatibility_date = "2024-03-02"
+
+routes = [
+  { pattern = "accounts.aryuki.com", custom_domain = true }
+]
+
+[assets]
+directory = "dist"
+
+[vars]
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "Mylover10"
+JWT_SECRET = "1ee9f5ea-f5e0-42d1-b434-65df7efb42c4"
+CF_ACCOUNT_ID = "3903d3554a2e7453ce23f44bc989fe6b"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "auth-center-db"
+database_id = "e72fc2ba-ff4b-4ec9-93e2-e5e6cbc3dedf"
+
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "auth-center"
