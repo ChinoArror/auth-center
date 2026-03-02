@@ -12,14 +12,34 @@ function App() {
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState<any[]>([]);
   const [apps, setApps] = useState<any[]>([]);
+  const [permissions, setPermissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Stats state
   const [statsData, setStatsData] = useState<any>(null);
   const [loadingStats, setLoadingStats] = useState(false);
 
-  // Check login state
+  // SSO Session Flow State
+  const [ssoMode, setSsoMode] = useState(false);
+  const [ssoAppId, setSsoAppId] = useState('');
+  const [ssoRedirect, setSsoRedirect] = useState('');
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [ssoError, setSsoError] = useState('');
+
+  // Check login state & Auto SSO Trigger
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirect = searchParams.get('redirect');
+    const appId = searchParams.get('app_id') || searchParams.get('client_id');
+
+    if (redirect && appId) {
+      setSsoMode(true);
+      setSsoAppId(appId);
+      setSsoRedirect(redirect);
+      setSsoLoading(true);
+      checkSsoSession(appId, redirect);
+    }
+
     const saved = localStorage.getItem('sso_admin_auth');
     if (saved) {
       setAuthHeader(saved);
@@ -27,10 +47,39 @@ function App() {
     }
   }, []);
 
+  const checkSsoSession = async (appId: string, redirect: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/session`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.active) {
+          const verifyRes = await fetch(`${API_BASE}/api/verify?app_id=${appId}`, {
+            headers: { 'Authorization': `Bearer ${data.token}` }
+          });
+          if (verifyRes.ok) {
+            await fetch(`${API_BASE}/api/track`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ app_id: appId, uuid: data.user.uuid, event_type: 'sso_auto_login', duration_seconds: 0 })
+            });
+            window.location.href = `${redirect}${redirect.includes('?') ? '&' : '?'}token=${data.token}`;
+            return;
+          } else {
+            setSsoError('You do not have permission to access this app.');
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    setSsoLoading(false);
+  };
+
   useEffect(() => {
     if (isLogged) {
       fetchUsers();
       fetchApps();
+      fetchPermissions();
     }
   }, [isLogged]);
 
@@ -50,6 +99,39 @@ function App() {
           alert('Invalid credentials');
         }
       }).catch(err => alert('Network error: ' + err.message));
+  };
+
+  const handleSsoLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSsoError('');
+    try {
+      const res = await fetch(`${API_BASE}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSsoError(data.error || 'Login failed');
+        return;
+      }
+
+      const verifyRes = await fetch(`${API_BASE}/api/verify?app_id=${ssoAppId}`, {
+        headers: { 'Authorization': `Bearer ${data.token}` }
+      });
+      if (verifyRes.ok) {
+        await fetch(`${API_BASE}/api/track`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ app_id: ssoAppId, uuid: data.uuid, event_type: 'login_success', duration_seconds: 0 })
+        });
+        window.location.href = `${ssoRedirect}${ssoRedirect.includes('?') ? '&' : '?'}token=${data.token}`;
+      } else {
+        setSsoError('You do not have permission to access this app.');
+      }
+    } catch (err: any) {
+      setSsoError(err.message);
+    }
   };
 
   const handleLogout = () => {
@@ -85,6 +167,11 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchPermissions = async () => {
+    const res = await authFetch('/admin/permissions');
+    if (res.ok) setPermissions(await res.json());
   };
 
   const fetchStats = async () => {
@@ -149,23 +236,25 @@ function App() {
 
   const createUser = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const fd = new FormData(form);
     const res = await authFetch('/admin/users', {
       method: 'POST',
       body: JSON.stringify(Object.fromEntries(fd.entries()))
     });
-    if (res.ok) { fetchUsers(); e.currentTarget.reset(); }
+    if (res.ok) { fetchUsers(); form.reset(); }
   };
 
   /* ----- Apps API Actions ----- */
   const createApp = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const fd = new FormData(form);
     const res = await authFetch('/admin/apps', {
       method: 'POST',
       body: JSON.stringify(Object.fromEntries(fd.entries()))
     });
-    if (res.ok) { fetchApps(); e.currentTarget.reset(); }
+    if (res.ok) { fetchApps(); form.reset(); }
   };
 
   const deleteApp = async (appId: string) => {
@@ -174,13 +263,73 @@ function App() {
     if (res.ok) fetchApps();
   };
 
-  if (!isLogged) {
+  /* ----- Permissions API Actions ----- */
+  const togglePermission = async (uuid: string, app_id: string, currentlyHasAccess: boolean) => {
+    const res = await authFetch('/admin/permissions', {
+      method: currentlyHasAccess ? 'DELETE' : 'POST',
+      body: JSON.stringify({ uuid, app_id })
+    });
+    if (res.ok) fetchPermissions();
+  };
+
+  if (ssoMode) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4 overflow-hidden z-50">
+        <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none"></div>
         <motion.div
           initial={{ opacity: 0, scale: 0.9, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="bg-black/20 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10"
+          className="bg-black/40 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10 relative z-10"
+        >
+          <div className="flex justify-center mb-6">
+            <div className="p-4 bg-gradient-to-tr from-blue-600 to-purple-600 rounded-2xl shadow-lg shadow-purple-500/20">
+              <Shield className="w-10 h-10 text-white" />
+            </div>
+          </div>
+          <h2 className="text-3xl font-bold text-center text-white mb-2 tracking-tight">Single Sign-On</h2>
+          <p className="text-purple-300/80 text-center mb-8 font-medium">Continue to {ssoAppId}</p>
+
+          {ssoLoading ? (
+            <div className="flex justify-center py-6"><Activity className="w-8 h-8 text-purple-400 animate-spin" /></div>
+          ) : (
+            <form onSubmit={handleSsoLogin} className="space-y-4">
+              {ssoError && <div className="bg-red-500/20 text-red-300 p-3 rounded-xl border border-red-500/30 text-sm text-center">{ssoError}</div>}
+              <div>
+                <input
+                  type="text" required placeholder="User Account"
+                  className="w-full bg-white/5 border border-purple-500/30 text-purple-200 placeholder-purple-300/50 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-purple-500 transition-all duration-300 shadow-inner"
+                  value={credentials.username} onChange={e => setCredentials({ ...credentials, username: e.target.value })}
+                />
+              </div>
+              <div>
+                <input
+                  type="password" required placeholder="Password"
+                  className="w-full bg-white/5 border border-purple-500/30 text-purple-200 placeholder-purple-300/50 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-purple-500 transition-all duration-300 shadow-inner"
+                  value={credentials.password} onChange={e => setCredentials({ ...credentials, password: e.target.value })}
+                />
+              </div>
+              <motion.button
+                whileHover={{ scale: 1.02, filter: 'brightness(1.1)' }}
+                whileTap={{ scale: 0.98 }}
+                className="w-full bg-gradient-to-r from-blue-600 via-purple-600 to-fuchsia-600 text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-purple-500/20 transition-all mt-4 border border-white/10"
+              >
+                Log In & Continue
+              </motion.button>
+            </form>
+          )}
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (!isLogged) {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4 overflow-hidden z-50">
+        <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none"></div>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="bg-black/20 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10 relative z-10"
         >
           <div className="flex justify-center mb-6">
             <div className="p-4 bg-gradient-to-tr from-purple-600 to-emerald-600 rounded-2xl shadow-lg shadow-emerald-500/20">
@@ -219,7 +368,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-white flex overflow-hidden">
+    <div className="fixed inset-0 overflow-hidden bg-[#0B0F19] text-white flex flex-col md:flex-row shadow-[0_0_0_100vmax_#0B0F19]">
       {/* Dynamic Background Elements */}
       <div className="absolute top-0 left-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-600/20 rounded-full blur-[120px] pointer-events-none" />
@@ -227,19 +376,24 @@ function App() {
 
       {/* Sidebar */}
       <motion.aside
-        initial={{ x: -300 }} animate={{ x: 0 }}
-        className="w-72 bg-white/5 backdrop-blur-3xl border-r border-white/10 flex flex-col z-10 relative"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+        className="w-full md:w-72 bg-white/5 backdrop-blur-3xl border-b md:border-b-0 md:border-r border-white/10 flex flex-col z-10 relative flex-shrink-0"
       >
-        <div className="p-8 pb-4 flex items-center gap-3">
-          <div className="p-2.5 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl shadow-lg shadow-purple-500/20">
-            <Activity className="w-6 h-6 text-white" />
+        <div className="p-4 md:p-8 md:pb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl shadow-lg shadow-purple-500/20">
+              <Activity className="w-6 h-6 text-white" />
+            </div>
+            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-200">
+              Auth Center
+            </span>
           </div>
-          <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-200">
-            Auth Center
-          </span>
+          <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
+            <LogOut className="w-5 h-5" />
+          </motion.button>
         </div>
 
-        <nav className="flex-1 px-4 mt-8 space-y-2">
+        <nav className="flex md:flex-col overflow-x-auto px-4 pb-2 md:mt-8 space-x-2 md:space-x-0 md:space-y-2 w-full no-scrollbar">
           {[
             { id: 'users', icon: Users, label: 'Users' },
             { id: 'apps', icon: LayoutGrid, label: 'Applications' },
@@ -251,18 +405,18 @@ function App() {
               whileHover={{ x: 4, backgroundColor: 'rgba(255,255,255,0.1)' }}
               whileTap={{ scale: 0.98 }}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-300 font-medium ${activeTab === tab.id
+              className={`flex-shrink-0 flex items-center gap-2 md:gap-3 px-4 py-2.5 md:py-3.5 rounded-2xl transition-all duration-300 font-medium ${activeTab === tab.id
                 ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-200 border border-purple-500/30 shadow-[0_0_20px_rgba(168,85,247,0.15)]'
                 : 'text-gray-400 hover:text-white border border-transparent'
                 }`}
             >
               <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'text-purple-400' : ''}`} />
-              {tab.label}
+              <span className="whitespace-nowrap">{tab.label}</span>
             </motion.button>
           ))}
         </nav>
 
-        <div className="p-4 mb-4">
+        <div className="hidden md:block p-4 mt-auto mb-4">
           <motion.button
             whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }}
             onClick={handleLogout}
@@ -275,7 +429,7 @@ function App() {
       </motion.aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-8 md:p-12 overflow-y-auto z-10 relative">
+      <main className="flex-1 p-4 md:p-8 lg:p-12 overflow-y-auto overflow-x-hidden z-10 relative">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -414,13 +568,62 @@ function App() {
             )}
 
             {activeTab === 'permissions' && (
-              <div className="flex items-center justify-center min-h-[50vh]">
-                <div className="text-center space-y-4">
-                  <div className="inline-flex p-5 bg-gradient-to-tr from-blue-500/20 to-purple-500/20 rounded-[2rem] border border-white/10 text-blue-300">
-                    <KeyRound className="w-12 h-12" />
-                  </div>
-                  <h2 className="text-2xl font-bold">Permissions Interface</h2>
-                  <p className="text-white/50 max-w-sm mx-auto">The APIs support permission assignment, but the advanced matrix view is coming in the next update. Please use API calls for now.</p>
+              <div>
+                <header className="mb-8 bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
+                  <h1 className="text-3xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">Permissions Matrix</h1>
+                  <p className="text-blue-200/60">Grant or revoke user access to specific external apps.</p>
+                </header>
+
+                <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-3xl p-6 overflow-x-auto shadow-xl">
+                  {users.length === 0 || apps.length === 0 ? (
+                    <div className="text-center py-10 text-white/50">You need to create at least one user and one application first.</div>
+                  ) : (
+                    <table className="w-full text-left border-collapse min-w-[600px]">
+                      <thead>
+                        <tr>
+                          <th className="p-4 border-b border-white/10 text-purple-300 font-semibold sticky left-0 bg-[#0c101a] z-10 w-1/4">User</th>
+                          {apps.map(app => (
+                            <th key={app.app_id} className="p-4 border-b border-white/10 text-emerald-300 font-semibold text-center w-32 border-l border-white/5">
+                              <div className="text-sm truncate w-full" title={app.app_name}>{app.app_name}</div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {users.map((user) => (
+                          <motion.tr
+                            key={user.uuid}
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                            className="hover:bg-white/5 transition-colors group"
+                          >
+                            <td className="p-4 border-b border-white/5 font-medium sticky left-0 bg-[#0c101a] group-hover:bg-[#121825] transition-colors z-10">
+                              <div className="flex flex-col">
+                                <span>{user.name}</span>
+                                <span className="text-xs text-white/40 font-mono">@{user.username}</span>
+                              </div>
+                            </td>
+                            {apps.map(app => {
+                              const hasAccess = permissions.some(p => p.uuid === user.uuid && p.app_id === app.app_id);
+                              return (
+                                <td key={`${user.uuid}-${app.app_id}`} className="p-4 border-b border-white/5 text-center border-l border-white/5">
+                                  <motion.button
+                                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                                    onClick={() => togglePermission(user.uuid, app.app_id, hasAccess)}
+                                    className={`relative inline-flex items-center justify-center p-2 rounded-xl transition-all ${hasAccess
+                                      ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:bg-emerald-500/30 ring-1 ring-emerald-500/50'
+                                      : 'bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/50 ring-1 ring-white/10'
+                                      }`}
+                                  >
+                                    {hasAccess ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5 opacity-40" />}
+                                  </motion.button>
+                                </td>
+                              );
+                            })}
+                          </motion.tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
             )}

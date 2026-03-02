@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { cors } from 'hono/cors';
 import { hashPassword, generateSalt, verifyPassword, generateJWT, verifyJWT } from './auth';
+import { getCookie, setCookie } from 'hono/cookie';
 
 type Bindings = {
   DB: D1Database;
@@ -49,6 +50,14 @@ app.post('/login', async (c) => {
 
   const token = await generateJWT(payload, c.env.JWT_SECRET, user.cookie_expiry_days);
 
+  setCookie(c, 'sso_session', token, {
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'Lax',
+    maxAge: user.cookie_expiry_days * 86400
+  });
+
   return c.json({
     token: token,
     jwt: token,
@@ -57,6 +66,20 @@ app.post('/login', async (c) => {
     name: user.name,
     timestamp: Math.floor(Date.now() / 1000)
   });
+});
+
+// Check Active SSO Session
+app.get('/api/session', async (c) => {
+  const token = getCookie(c, 'sso_session');
+  if (!token) return c.json({ active: false }, 401);
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    const user: any = await c.env.DB.prepare('SELECT status FROM users WHERE uuid = ?').bind(payload.uuid).first();
+    if (!user || user.status !== 'active') return c.json({ active: false }, 401);
+    return c.json({ active: true, user: payload, token });
+  } catch (e) {
+    return c.json({ active: false }, 401);
+  }
 });
 
 // Verify Token & App Permission
@@ -212,6 +235,11 @@ app.delete('/admin/apps/:app_id', async (c) => {
 });
 
 // Permissions
+app.get('/admin/permissions', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM user_apps').all();
+  return c.json(results);
+});
+
 app.post('/admin/permissions', async (c) => {
   const { uuid, app_id } = await c.req.json();
   try {

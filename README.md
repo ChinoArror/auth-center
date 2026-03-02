@@ -140,44 +140,37 @@ The system automatically records the user's country (via Cloudflare headers) and
 
 Here is how you can practically adapt your other web applications (frontend and backend) to use this SSO center.
 
-### Example 1: Frontend Login Flow (React/Vanilla JS)
+### Example 1: OAuth-Style Seamless SSO Flow (Recommended)
 
-When a user visits your app, check for the JWT. If not present, send them to log in via your own customized login page or the unified center.
+When a user visits your app, check for the session. If not present, seamlessly redirect them to log in via the unified center.
 
 ```javascript
-// Function to login and save the token
-async function performSSOLogin(username, password) {
-  const SSO_URL = 'https://sso-analytics-worker.yysy-rhy.workers.dev';
+// Function to initiate SSO
+function loginWithSSO() {
+  const SSO_URL = 'https://accounts.aryuki.com';
+  const APP_ID = 'your-app-id'; // Your registered app in the dashboard
+  const RETURN_URL = window.location.origin + '/sso-callback'; 
   
-  const response = await fetch(`${SSO_URL}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
-  });
-
-  if (!response.ok) {
-    throw new Error('Login failed');
-  }
-
-  const data = await response.json();
-  // Save JWT to localStorage or Cookie
-  localStorage.setItem('sso_token', data.jwt);
-  
-  // Track successful login to SSO Analytics
-  await fetch(`${SSO_URL}/api/track`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      app_id: 'your-app-id',
-      uuid: data.uuid,
-      event_type: 'login_success',
-      duration_seconds: 0
-    })
-  });
-
-  return data;
+  // 1. Redirect to Auth Center
+  window.location.href = `${SSO_URL}/?client_id=${APP_ID}&redirect=${encodeURIComponent(RETURN_URL)}`;
 }
 ```
+
+```javascript
+// On your child app logic (/sso-callback page)
+window.onload = function() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+  
+  if (token) {
+    // 2. Extract Token and store locally
+    localStorage.setItem('app_session', token);
+    window.location.href = '/dashboard';
+  }
+}
+```
+
+*Note: As long as the user's secure Cookie is valid on `accounts.aryuki.com`, clicking Login on any other authorized satellite Apps (like App B or C) will trigger a **0-second passwordless transparent redirect!***
 
 ### Example 2: Backend API Protection (Node.js/Hono/Express)
 
@@ -187,7 +180,7 @@ For your sub-app's backend, verify the user's session by making a request to the
 // Express.js middleware example for a Sub-App
 async function requireSSO(req, res, next) {
   const token = req.headers.authorization;
-  const SSO_URL = 'https://sso-analytics-worker.yysy-rhy.workers.dev';
+  const SSO_URL = 'https://accounts.aryuki.com';
   
   if (!token) return res.status(401).json({ error: 'No token provided' });
 
