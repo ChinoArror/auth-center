@@ -38,6 +38,8 @@ npx wrangler deploy
 
 所有的 `/admin/*` 路由均受 Basic 鉴权保护。你需要在 `wrangler.toml` 设置 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD` 这对默认管理员密码。
 
+> **管理员可登录子应用：** `ADMIN_USERNAME` / `ADMIN_PASSWORD` 配置的管理员账号，可以直接在子应用的 SSO 登录页面输入登录。管理员 JWT 默认跳过所有应用权限检测，可访问所有已注册子应用，有效期默认 7 天。
+
 ### 管理控制台 (Web UI)
 这个项目已经附带了一个**可视化的后台管理面板**。部署后直接访问你的 Workers 域名（或者配置好的自定义域名），即可通过管理员账密登录。
 - **用户管理**：创建账户与限制访问权限，支持立刻暂停或恢复。
@@ -47,7 +49,27 @@ npx wrangler deploy
 
 ### 接口调用范例：子应用对接 SSO 流水线
 
-#### 1. OAuth 风格前端无感知对接 (推荐)
+#### 1. 用户登录接口
+
+**接口地址：** `POST /login`  
+**请求体：** `{"username": "johndoe", "password": "securepassword123"}`
+
+**成功响应：**
+```json
+{
+  "token": "<jwt_string>",
+  "jwt": "<jwt_string>",
+  "uuid": "<user_uuid>",
+  "user_id": 1,
+  "name": "John Doe",
+  "username": "johndoe",
+  "timestamp": 1709390000
+}
+```
+
+JWT Payload 包含字段：`{ uuid, user_id, name, username, status, exp }`。`name` 和 `username` 两个字段均已包含，子应用可以直接用于显示用户名或账号名。
+
+#### 2. OAuth 风格前端无感知对接 (推荐)
 
 鉴权中心现在全面支持跨站重定向静默登录机制（基于 HttpOnly Cookie + 短期会话票据），无需在子应用手写复杂的 API。只需直接重定向用户到 Auth-Center 就行了：
 
@@ -78,8 +100,8 @@ window.onload = function() {
 
 *附录注意：该模式只要用户在 `accounts.aryuki.com` 处于 Cookie 有效期，前往 B、C 应用时点击 Login 将会触发**0秒无感免密穿越**！*
 
-#### 2. 服务端 / API 层加密校验
-子应用本身的后端处理高敏数据时，请在每一个需要权限的路由加上类似以下的中间件，来确认当前的 Token 以及查询请求者对特定 App ID 的访问权是否处于“Active”未被暂停的状态：
+#### 3. 服务端 / API 层加密校验
+子应用本身的后端处理高敏数据时，请在每一个需要权限的路由加上以下中间件，用于核验 Token 及应用权限：
 
 ```javascript
 async function requireSSO(req, res, next) {
@@ -107,4 +129,103 @@ async function requireSSO(req, res, next) {
   }
 }
 ```
+
+#### 4. 用户自助修改密码
+
+无需管理员介入，用户可以通过以下独立页面自行修改密码：
+
+**页面地址：** `https://accounts.aryuki.com/<user_uuid>/change-password`
+
+**后端接口：** `POST /api/users/<uuid>/change-password`
+**请求体：** `{"oldPassword": "当前密码", "newPassword": "新密码"}`
+
+页面会在更改前验证旧密码。管理员可在 User Profile 页面点击"Copy Self-Service Link"按钮复制链接后发给用户。
+
+---
+
+## 3. 子应用退出登录 → 同步退出 Auth Center
+
+当用户在子应用点击退出（Sign Out）时，应**同时清除 Auth Center 的 SSO 会话 Cookie**。
+
+这样做的好处：
+- 下次再点击"登录"时，Auth Center **不会自动静默重定向**，而是显示登录表单
+- 用户可以**切换到其他账号**，或用相同账号重新输入密码登录
+- 实现**全系统真正注销**，而非仅仅清除子应用本地状态
+
+### 两种退出方式
+
+#### 方式一：重定向退出（推荐，适合浏览器场景）
+
+```
+GET https://accounts.aryuki.com/logout?redirect=<你的回调地址>
+```
+
+Auth Center 会清除 `sso_session` Cookie，然后立即跳转到你指定的 URL。
+
+**在子应用的 JavaScript 中实现：**
+```javascript
+function handleSignOut() {
+  // 第一步：清除子应用自己的本地会话
+  localStorage.removeItem('app_session');
+
+  // 第二步：跳转到 Auth Center 清除 SSO Cookie
+  const SSO_URL = 'https://accounts.aryuki.com';
+  const afterLogoutUrl = encodeURIComponent(window.location.origin + '/login');
+  window.location.href = `${SSO_URL}/logout?redirect=${afterLogoutUrl}`;
+}
+```
+
+跳转完成后，用户会回到子应用的登录页。下次点击"登录"，Auth Center 将展示全新的账密输入表单，用户可以切换账号或重新登录。
+
+#### 方式二：API 退出（适合后端或 fetch 调用场景）
+
+```
+POST https://accounts.aryuki.com/api/logout
+```
+
+通过 `fetch` 调用时，**必须加 `credentials: 'include'`**，否则浏览器无法将 `sso_session` Cookie 发送过去（该 Cookie 是 HttpOnly，只能由服务端清除，浏览器无法直接操作）：
+
+```javascript
+async function handleSignOut() {
+  // 第一步：清除子应用本地 session
+  localStorage.removeItem('app_session');
+
+  // 第二步：调用 Auth Center 退出接口
+  await fetch('https://accounts.aryuki.com/api/logout', {
+    method: 'POST',
+    credentials: 'include',  // ← 关键！必须加，否则 Cookie 无法被发送和清除
+  });
+
+  // 第三步：跳转到子应用的登录页
+  window.location.href = '/login';
+}
+```
+
+> **关于 `credentials: 'include'` 的说明：**
+> `sso_session` 是一个由 Auth Center 种在 `accounts.aryuki.com` 域下的 `HttpOnly` Cookie，子应用的 JavaScript 无法直接读取或删除它。
+> 为了清除它，浏览器必须将其发送回 `accounts.aryuki.com`，这只有在 fetch 请求中加了 `credentials: 'include'` 时才会发生。
+> 如果不加这个参数，退出请求会成功返回 200，但 SSO Cookie 实际上不会被清除，下次用户访问子应用还是会自动静默登录！
+
+#### 方式三（推荐 Cloudflare Workers 子应用）：后端统一处理
+
+如果你的子应用也是基于 Cloudflare Workers（比如用 Hono），可以在子应用的后端统一处理退出逻辑，代理转发 Cookie 并清除双端会话：
+
+```typescript
+// 子应用 Hono worker 中
+app.post('/api/signout', async (c) => {
+  // 第一步：清除子应用自己的 session Cookie
+  setCookie(c, 'app_session', '', { path: '/', maxAge: 0 });
+
+  // 第二步：代理转发退出请求到 Auth Center，并转发浏览器的 Cookie 头
+  await fetch('https://accounts.aryuki.com/api/logout', {
+    method: 'POST',
+    headers: { 'Cookie': c.req.header('Cookie') || '' }
+  });
+
+  return c.json({ success: true });
+});
+```
+
+---
+
 更多配置详见源码 `src/` 结构与 `wrangler.toml` 环境设置。

@@ -9,6 +9,7 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
+    password_plain TEXT,
     status TEXT NOT NULL DEFAULT 'active', -- 'active' or 'paused'
     cookie_expiry_days INTEGER NOT NULL DEFAULT 7,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP

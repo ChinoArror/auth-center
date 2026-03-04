@@ -8,6 +8,7 @@ routes = [
 
 [assets]
 directory = "dist"
+binding = "ASSETS"
 
 [vars]
 ADMIN_USERNAME = "admin"

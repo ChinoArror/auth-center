@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock } from 'lucide-react';
+import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink } from 'lucide-react';
+import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
+import UserProfile from './UserProfile';
+import ChangePassword from './ChangePassword';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
-function App() {
+function Dashboard() {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [isLogged, setIsLogged] = useState(false);
   const [authHeader, setAuthHeader] = useState('');
+  const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState<any[]>([]);
@@ -476,12 +480,16 @@ function App() {
                         >
                           <div>
                             <div className="flex items-center gap-3">
-                              <h4 className="font-semibold text-lg">{u.name}</h4>
+                              <Link to={`/@${u.username}`} className="font-semibold text-lg hover:underline text-purple-300 transition-colors flex items-center gap-1">
+                                {u.name} <ExternalLink className="w-4 h-4 opacity-50" />
+                              </Link>
                               <span className={`px-3 py-1 text-xs rounded-full font-medium ${u.status === 'active' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}`}>
                                 {u.status.toUpperCase()}
                               </span>
                             </div>
-                            <p className="text-sm text-white/40 mt-1">@{u.username} • Exp: {u.cookie_expiry_days} days</p>
+                            <Link to={`/@${u.username}`} className="text-sm text-white/40 mt-1 hover:text-purple-300 hover:underline transition-colors block">
+                              @{u.username} • Exp: {u.cookie_expiry_days} days
+                            </Link>
                           </div>
 
                           <div className="flex items-center gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
@@ -688,4 +696,25 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  const location = useLocation();
+  const isProfileMatch = location.pathname.match(/^\/@([^/]+)\/?$/);
+
+  if (isProfileMatch) {
+    // Return UserProfile, but we need to modify UserProfile to accept username prop or params.
+    // Wait, UserProfile reads from useParams(). So rendering it directly will fail to read username.
+    // Or we can just render the profile inside a route:
+    return (
+      <Routes>
+        <Route path={location.pathname} element={<UserProfile usernameOverride={decodeURIComponent(isProfileMatch[1])} />} />
+      </Routes>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route path="/:uuid/change-password" element={<ChangePassword />} />
+      <Route path="/*" element={<Dashboard />} />
+    </Routes>
+  );
+}

@@ -7,6 +7,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 type Bindings = {
   DB: D1Database;
   ANALYTICS: AnalyticsEngineDataset;
+  ASSETS: Fetcher;
   ADMIN_USERNAME: string;
   ADMIN_PASSWORD: string;
   JWT_SECRET: string;
@@ -27,45 +28,77 @@ app.post('/login', async (c) => {
     return c.json({ error: 'Username and password required' }, 400);
   }
 
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
-  if (!user) {
-    return c.json({ error: 'Invalid credentials' }, 401);
-  }
+  let userToAuth: any = null;
 
-  if (user.status === 'paused') {
-    return c.json({ error: 'Account is paused' }, 403);
-  }
-
-  const isValid = await verifyPassword(password, user.password_salt, user.password_hash);
-  if (!isValid) {
+  if (username === c.env.ADMIN_USERNAME && password === c.env.ADMIN_PASSWORD) {
+    userToAuth = {
+      uuid: 'admin',
+      user_id: 0,
+      name: 'Admin',
+      username: username,
+      status: 'active',
+      cookie_expiry_days: 7
+    };
+  } else if (username === c.env.ADMIN_USERNAME) {
     return c.json({ error: 'Invalid credentials' }, 401);
+  } else {
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
+    if (!user) {
+      return c.json({ error: 'Invalid credentials' }, 401);
+    }
+
+    if (user.status === 'paused') {
+      return c.json({ error: 'Account is paused' }, 403);
+    }
+
+    const isValid = await verifyPassword(password, user.password_salt, user.password_hash);
+    if (!isValid) {
+      return c.json({ error: 'Invalid credentials' }, 401);
+    }
+
+    userToAuth = user;
   }
 
   const payload = {
-    uuid: user.uuid,
-    user_id: user.user_id,
-    name: user.name,
-    status: user.status
+    uuid: userToAuth.uuid,
+    user_id: userToAuth.user_id,
+    name: userToAuth.name,
+    username: userToAuth.username,
+    status: userToAuth.status
   };
 
-  const token = await generateJWT(payload, c.env.JWT_SECRET, user.cookie_expiry_days);
+  const token = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
 
   setCookie(c, 'sso_session', token, {
     path: '/',
     secure: true,
     httpOnly: true,
     sameSite: 'Lax',
-    maxAge: user.cookie_expiry_days * 86400
+    maxAge: userToAuth.cookie_expiry_days * 86400
   });
 
   return c.json({
     token: token,
     jwt: token,
-    uuid: user.uuid,
-    user_id: user.user_id,
-    name: user.name,
+    uuid: userToAuth.uuid,
+    user_id: userToAuth.user_id,
+    name: userToAuth.name,
+    username: userToAuth.username,
     timestamp: Math.floor(Date.now() / 1000)
   });
+});
+
+// Logout
+app.post('/api/logout', async (c) => {
+  setCookie(c, 'sso_session', '', { path: '/', maxAge: 0, secure: true, httpOnly: true, sameSite: 'Lax' });
+  return c.json({ success: true });
+});
+
+app.get('/logout', async (c) => {
+  setCookie(c, 'sso_session', '', { path: '/', maxAge: 0, secure: true, httpOnly: true, sameSite: 'Lax' });
+  const redirect = c.req.query('redirect');
+  if (redirect) return c.redirect(redirect);
+  return c.json({ success: true, message: 'Logged out successfully' });
 });
 
 // Check Active SSO Session
@@ -74,6 +107,7 @@ app.get('/api/session', async (c) => {
   if (!token) return c.json({ active: false }, 401);
   try {
     const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.uuid === 'admin') return c.json({ active: true, user: payload, token });
     const user: any = await c.env.DB.prepare('SELECT status FROM users WHERE uuid = ?').bind(payload.uuid).first();
     if (!user || user.status !== 'active') return c.json({ active: false }, 401);
     return c.json({ active: true, user: payload, token });
@@ -94,6 +128,10 @@ app.get('/api/verify', async (c) => {
 
   try {
     const payload = await verifyJWT(token, c.env.JWT_SECRET);
+
+    if (payload.uuid === 'admin') {
+      return c.json({ valid: true, user: payload });
+    }
 
     // Check if user is active in DB (crucial for pause/continue)
     const user: any = await c.env.DB.prepare('SELECT status FROM users WHERE uuid = ?').bind(payload.uuid).first();
@@ -148,6 +186,25 @@ app.post('/api/track', async (c) => {
   return c.json({ success: true });
 });
 
+// Self-service password change
+app.post('/api/users/:uuid/change-password', async (c) => {
+  const uuid = c.req.param('uuid');
+  const { oldPassword, newPassword } = await c.req.json();
+
+  const user: any = await c.env.DB.prepare('SELECT password_hash, password_salt FROM users WHERE uuid = ?').bind(uuid).first();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+
+  const isValid = await verifyPassword(oldPassword, user.password_salt, user.password_hash);
+  if (!isValid) return c.json({ error: 'Incorrect original password' }, 401);
+
+  const newSalt = generateSalt();
+  const newHash = await hashPassword(newPassword, newSalt);
+
+  await c.env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_plain = ? WHERE uuid = ?').bind(newHash, newSalt, newPassword, uuid).run();
+
+  return c.json({ success: true });
+});
+
 
 // --- Admin Routes ---
 
@@ -162,7 +219,7 @@ app.use('/admin/*', async (c, next) => {
 
 // Users CRUD
 app.get('/admin/users', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT user_id, uuid, username, name, status, cookie_expiry_days, created_at FROM users').all();
+  const { results } = await c.env.DB.prepare('SELECT user_id, uuid, username, name, status, cookie_expiry_days, password_plain, created_at FROM users').all();
   return c.json(results);
 });
 
@@ -174,12 +231,36 @@ app.post('/admin/users', async (c) => {
 
   try {
     await c.env.DB.prepare(
-      'INSERT INTO users (uuid, username, name, password_hash, password_salt, cookie_expiry_days) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(uuid, username, name, hash, salt, cookie_expiry_days).run();
+      'INSERT INTO users (uuid, username, name, password_hash, password_salt, password_plain, cookie_expiry_days) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid, username, name, hash, salt, password, cookie_expiry_days).run();
     return c.json({ success: true, uuid });
   } catch (e: any) {
     return c.json({ error: e.message }, 400);
   }
+});
+
+app.put('/admin/users/:uuid', async (c) => {
+  const uuid = c.req.param('uuid');
+  const { name, username, cookie_expiry_days } = await c.req.json();
+  try {
+    await c.env.DB.prepare(
+      'UPDATE users SET name = ?, username = ?, cookie_expiry_days = ? WHERE uuid = ?'
+    ).bind(name, username, cookie_expiry_days, uuid).run();
+    return c.json({ success: true });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 400);
+  }
+});
+
+app.put('/admin/users/:uuid/password', async (c) => {
+  const uuid = c.req.param('uuid');
+  const { password } = await c.req.json();
+  const salt = generateSalt();
+  const hash = await hashPassword(password, salt);
+  await c.env.DB.prepare(
+    'UPDATE users SET password_hash = ?, password_salt = ?, password_plain = ? WHERE uuid = ?'
+  ).bind(hash, salt, password, uuid).run();
+  return c.json({ success: true });
 });
 
 app.delete('/admin/users/:uuid', async (c) => {
@@ -278,6 +359,11 @@ app.post('/admin/stats/graphql', async (c) => {
 
   const data = await response.json();
   return c.json(data);
+});
+
+// Fallback for SPA Routing (React Router)
+app.get('*', async (c) => {
+  return await c.env.ASSETS.fetch(new Request(new URL('/', c.req.url).toString(), c.req.raw));
 });
 
 export default app;

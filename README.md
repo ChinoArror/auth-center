@@ -28,7 +28,7 @@ Run the following command to initialize the database tables:
 npx wrangler d1 execute sso-db --local --file=./schema.sql
 
 # For production
-npx wrangler d1 execute sso-db --file=./schema.sql
+npx wrangler d1 execute sso-db --remote --file=./schema.sql
 ```
 
 ### Deploy the Worker
@@ -36,12 +36,16 @@ npx wrangler d1 execute sso-db --file=./schema.sql
 Deploy the worker to Cloudflare:
 
 ```bash
+npm install
+npm run build
 npx wrangler deploy
 ```
 
 ## 2. Admin API Usage
 
 The Admin API is protected by Basic Auth. Use the `ADMIN_USERNAME` and `ADMIN_PASSWORD` defined in your `wrangler.toml` (or set them as secrets via `wrangler secret put`).
+
+> **Admin Login on Sub-Apps:** The admin account (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) can also log into any sub-app via the SSO login page. The admin JWT bypasses all per-app permission checks and grants access to every registered application by default.
 
 ### Apps Management
 
@@ -104,9 +108,12 @@ Sub-apps should redirect users to a centralized login page (or handle it via API
   "uuid": "<user_uuid>",
   "user_id": 1,
   "name": "John Doe",
+  "username": "johndoe",
   "timestamp": 1709390000
 }
 ```
+
+The JWT payload also contains: `{ uuid, user_id, name, username, status, exp }`. The `name` and `username` fields are both included so sub-apps can display the user's display name.
 
 ### Token Verification
 
@@ -134,9 +141,100 @@ Sub-apps can send usage data to the centralized Analytics Engine.
 
 The system automatically records the user's country (via Cloudflare headers) and parses the `User-Agent` to determine the device type and browser.
 
+### User Self-Service Password Change
+
+Users can change their own password via a dedicated public page (no admin login required).
+
+**Page URL:** `https://accounts.aryuki.com/<user_uuid>/change-password`
+
+**API Endpoint:** `POST /api/users/<uuid>/change-password`
+**Payload:** `{"oldPassword": "current", "newPassword": "updated"}`
+
+The page verifies the old password before allowing the update. You can copy the link from the User Profile page in the admin panel.
+
 ---
 
-## 4. WebApp Integration Code Examples
+## 4. Sign-Out Integration (Sub-App → Auth Center)
+
+When a user signs out of a sub-app, you should **also** invalidate their Auth Center session cookie. This ensures:
+- The next time they click "Login" on any sub-app, they will be prompted to log in again (no silent auto-redirect).
+- They can switch to a different account.
+- They are fully logged out across the SSO system.
+
+### Two Available Sign-Out Endpoints
+
+#### Method 1: Redirect-based Logout (Recommended for browser flows)
+
+```
+GET https://accounts.aryuki.com/logout?redirect=<your-callback-url>
+```
+
+The Auth Center will clear the `sso_session` cookie, then immediately redirect the user back to the URL you specify.
+
+**Example – JavaScript redirect from your sub-app:**
+```javascript
+function handleSignOut() {
+  // Clear your own app's local session first
+  localStorage.removeItem('app_session');
+
+  // Then redirect to Auth Center to clear the SSO cookie
+  const SSO_URL = 'https://accounts.aryuki.com';
+  const afterLogoutUrl = encodeURIComponent(window.location.origin + '/login');
+  window.location.href = `${SSO_URL}/logout?redirect=${afterLogoutUrl}`;
+}
+```
+
+After the redirect, the user lands back on your sub-app's login page. The next time they click "Sign In", the Auth Center will show the login form (no stored session), allowing them to enter any credentials.
+
+#### Method 2: API Logout (For backend or fetch-based flows)
+
+```
+POST https://accounts.aryuki.com/api/logout
+```
+
+Call this from your backend or via `fetch` (the browser must include cookies for the call to work, so this requires being on the same origin or using `credentials: 'include'`):
+
+```javascript
+async function handleSignOut() {
+  // Clear your own app's local session
+  localStorage.removeItem('app_session');
+
+  // Call Auth Center API to clear SSO cookie
+  await fetch('https://accounts.aryuki.com/api/logout', {
+    method: 'POST',
+    credentials: 'include',   // <-- required so the browser sends the SSO cookie
+  });
+
+  // Redirect to your app's login page
+  window.location.href = '/login';
+}
+```
+
+> **Note on `credentials: 'include'`:** This is required because the `sso_session` cookie is an `HttpOnly` cookie set on the `accounts.aryuki.com` domain. To clear it, the browser must send the cookie back to that domain, which only happens when `credentials: 'include'` is set. Without it, the cookie will remain active.
+
+### Recommended Sign-Out Implementation (Cloudflare Workers sub-apps)
+
+If your sub-app is also a Cloudflare Worker (e.g., using Hono), you can handle sign-out in a single backend route:
+
+```typescript
+// In your sub-app's Hono worker
+app.post('/api/signout', async (c) => {
+  // 1. Clear sub-app session cookie
+  setCookie(c, 'app_session', '', { path: '/', maxAge: 0 });
+
+  // 2. Proxy the logout to Auth Center
+  await fetch('https://accounts.aryuki.com/api/logout', {
+    method: 'POST',
+    headers: { 'Cookie': c.req.header('Cookie') || '' } // forward the sso_session cookie
+  });
+
+  return c.json({ success: true });
+});
+```
+
+---
+
+## 5. WebApp Integration Code Examples
 
 Here is how you can practically adapt your other web applications (frontend and backend) to use this SSO center.
 
