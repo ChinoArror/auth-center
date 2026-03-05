@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Shield, Copy, Check, Eye, EyeOff, ArrowLeft } from 'lucide-react';
+import { Shield, Copy, Check, Eye, EyeOff, ArrowLeft, Github } from 'lucide-react';
 import { useParams, Navigate, Link } from 'react-router-dom';
 
 const API_BASE = '';
@@ -20,6 +20,7 @@ export default function UserProfile({ usernameOverride }: { usernameOverride?: s
     const [showPasswordInput, setShowPasswordInput] = useState(false);
     const [showPlainPassword, setShowPlainPassword] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [copiedGithub, setCopiedGithub] = useState(false);
 
     React.useEffect(() => {
         if (isLogged) {
@@ -130,7 +131,17 @@ export default function UserProfile({ usernameOverride }: { usernameOverride?: s
                     <div className="flex-1 w-full min-w-0">
                         <p className="text-white/40 text-xs mb-1">Avatar placeholder · feature reserved</p>
                         <h3 className="text-xl font-bold truncate">{user?.name}</h3>
-                        <p className="text-white/30 text-xs font-mono mt-1 truncate">{user?.uuid}</p>
+                        <p className="text-white/30 text-xs font-mono mt-1 mb-2 truncate">{user?.uuid}</p>
+
+                        {user?.github_id ? (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-medium">
+                                <Github className="w-3.5 h-3.5" /> Bound to GitHub ({user.github_id})
+                            </div>
+                        ) : (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 text-white/50 border border-white/10 text-xs font-medium">
+                                <Github className="w-3.5 h-3.5" /> No GitHub Bound
+                            </div>
+                        )}
 
                         {/* Password reveal area */}
                         <div className="relative mt-3">
@@ -214,6 +225,27 @@ export default function UserProfile({ usernameOverride }: { usernameOverride?: s
                             </motion.button>
                         </div>
                     </form>
+                </div>
+
+                {/* SSO Integrations */}
+                <div className="mt-6 bg-white/5 border border-white/10 p-6 rounded-3xl space-y-4">
+                    <h3 className="font-semibold text-base mb-4 text-white/80 flex items-center gap-2"><Github className="w-5 h-5" /> GitHub SSO Binding</h3>
+                    <p className="text-sm text-white/60">
+                        Allow this user to log in using their GitHub account. Send them the binding link.
+                    </p>
+                    <div className="pt-2 md:w-1/2">
+                        <motion.button type="button" onClick={() => {
+                            const link = `${window.location.origin}/${user?.uuid}/sso-binding`;
+                            navigator.clipboard.writeText(link);
+                            setCopiedGithub(true);
+                            setTimeout(() => setCopiedGithub(false), 2000);
+                        }}
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                            className="w-full flex items-center justify-center gap-2 bg-[#171515] hover:bg-[#201e1e] text-white font-semibold py-3 rounded-xl shadow-lg transition-all text-sm border border-white/10">
+                            {copiedGithub ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                            {copiedGithub ? 'Copied Bind Link!' : 'Copy GitHub Bind Link'}
+                        </motion.button>
+                    </div>
                 </div>
             </div>
         </div>

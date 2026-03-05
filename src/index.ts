@@ -13,6 +13,9 @@ type Bindings = {
   JWT_SECRET: string;
   CF_ACCOUNT_ID: string;
   CF_API_TOKEN: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
+  ADMIN_GITHUB_ID: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -33,7 +36,7 @@ app.post('/login', async (c) => {
   if (username === c.env.ADMIN_USERNAME && password === c.env.ADMIN_PASSWORD) {
     userToAuth = {
       uuid: 'admin',
-      user_id: 0,
+      user_id: "0",
       name: 'Admin',
       username: username,
       status: 'active',
@@ -205,11 +208,207 @@ app.post('/api/users/:uuid/change-password', async (c) => {
   return c.json({ success: true });
 });
 
+// Verify Password for SSO Binding
+app.post('/api/users/:uuid/verify-password', async (c) => {
+  const uuid = c.req.param('uuid');
+  const { password } = await c.req.json();
+  const user: any = await c.env.DB.prepare('SELECT password_hash, password_salt FROM users WHERE uuid = ?').bind(uuid).first();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+
+  const isValid = await verifyPassword(password, user.password_salt, user.password_hash);
+  if (!isValid) return c.json({ error: 'Incorrect password' }, 401);
+
+  const token = await generateJWT({ action: 'bind', uuid }, c.env.JWT_SECRET, 1 / 24); // 1 hour validity
+  return c.json({ success: true, bind_token: token });
+});
+
+// GitHub Login
+app.get('/api/github/login', async (c) => {
+  const admin_uuid = c.req.query('admin_bind');
+  const bind_token = c.req.query('bind_token');
+  const app_redirect = c.req.query('app_redirect');
+  const app_id = c.req.query('app_id');
+
+  let statePayload: any = { action: 'login' };
+
+  if (app_redirect && app_id) {
+    statePayload = { action: 'sso_login', app_redirect, app_id };
+  }
+
+  if (admin_uuid === 'admin') {
+    statePayload = { action: 'bind', uuid: 'admin' };
+  } else if (bind_token) {
+    try {
+      const payload = await verifyJWT(bind_token, c.env.JWT_SECRET);
+      if (payload.action === 'bind') {
+        statePayload = { action: 'bind', uuid: payload.uuid };
+      }
+    } catch (e) {
+      return c.text('Invalid bind token', 400);
+    }
+  }
+
+  const state = await generateJWT(statePayload, c.env.JWT_SECRET, 1);
+  const redirect_uri = `${new URL(c.req.url).origin}/api/github/callback`;
+
+  const githubUrl = `https://github.com/login/oauth/authorize?client_id=${c.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirect_uri)}&state=${state}`;
+  return c.redirect(githubUrl);
+});
+
+// GitHub Callback
+app.get('/api/github/callback', async (c) => {
+  const code = c.req.query('code');
+  const state = c.req.query('state');
+
+  if (!code || !state) return c.text('Missing code or state', 400);
+
+  let statePayload: any;
+  try {
+    statePayload = await verifyJWT(state, c.env.JWT_SECRET);
+  } catch (e) {
+    return c.text('Invalid state', 400);
+  }
+
+  const redirect_uri = `${new URL(c.req.url).origin}/api/github/callback`;
+
+  const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: c.env.GITHUB_CLIENT_ID,
+      client_secret: c.env.GITHUB_CLIENT_SECRET,
+      code,
+      redirect_uri
+    })
+  });
+
+  const tokenData: any = await tokenResponse.json();
+  if (tokenData.error) return c.text(`GitHub Error: ${tokenData.error_description}`, 400);
+
+  const userResponse = await fetch('https://api.github.com/user', {
+    headers: {
+      'Authorization': `Bearer ${tokenData.access_token}`,
+      'User-Agent': 'cloudflare-worker'
+    }
+  });
+
+  const userData: any = await userResponse.json();
+  const githubId = userData.id.toString();
+
+  if (statePayload.action === 'bind') {
+    if (statePayload.uuid === 'admin') {
+      return c.html(`
+        <html><body style="background:#0B0F19;color:white;font-family:sans-serif;padding:40px;text-align:center;">
+          <h2>Admin GitHub Bound Locally</h2>
+          <p>Your GitHub ID is <strong style="color:#4ade80;font-size:24px;">${githubId}</strong>.</p>
+          <p>Please add <code>ADMIN_GITHUB_ID = "${githubId}"</code> to your <code>wrangler.toml</code> or Cloudflare environment variables.</p>
+          <button onclick="window.close()" style="margin-top:20px;padding:10px 20px;background:#9333ea;color:white;border:none;border-radius:10px;cursor:pointer;">Close</button>
+        </body></html>
+      `);
+    } else {
+      await c.env.DB.prepare('UPDATE users SET github_id = ? WHERE uuid = ?').bind(githubId, statePayload.uuid).run();
+      return c.html(`
+        <html><body style="background:#0B0F19;color:white;font-family:sans-serif;padding:40px;text-align:center;">
+          <h2 style="color:#4ade80;">GitHub Bound Successfully</h2>
+          <p>You can now use GitHub to log in.</p>
+          <button onclick="window.close()" style="margin-top:20px;padding:10px 20px;background:#9333ea;color:white;border:none;border-radius:10px;cursor:pointer;">Close Window</button>
+        </body></html>
+      `);
+    }
+  } else if (statePayload.action === 'login' || statePayload.action === 'sso_login') {
+    let userToAuth: any = null;
+
+    if (githubId === c.env.ADMIN_GITHUB_ID) {
+      userToAuth = {
+        uuid: 'admin',
+        user_id: "0",
+        name: 'Admin',
+        username: c.env.ADMIN_USERNAME,
+        status: 'active',
+        cookie_expiry_days: 7
+      };
+    } else {
+      const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE github_id = ?').bind(githubId).first();
+      if (!user) {
+        return c.redirect('/?error=github_not_bound');
+      }
+      if (user.status === 'paused') return c.redirect('/?error=account_paused');
+      userToAuth = user;
+    }
+
+    const payload = {
+      uuid: userToAuth.uuid,
+      user_id: userToAuth.user_id,
+      name: userToAuth.name,
+      username: userToAuth.username,
+      status: userToAuth.status
+    };
+
+    const jwtToken = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+
+    if (statePayload.action === 'sso_login') {
+      const appId = statePayload.app_id;
+      const redirect = statePayload.app_redirect;
+
+      if (userToAuth.uuid !== 'admin') {
+        const permission = await c.env.DB.prepare('SELECT * FROM user_apps WHERE uuid = ? AND app_id = ?').bind(userToAuth.uuid, appId).first();
+        if (!permission) {
+          return c.redirect('/?error=no_permission');
+        }
+      }
+
+      await fetch(`${new URL(c.req.url).origin}/api/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app_id: appId, uuid: userToAuth.uuid, event_type: 'login_success', duration_seconds: 0 })
+      }).catch(() => { });
+
+      return c.html(`
+        <html><body>
+          <script>
+            window.location.href = '${redirect}${redirect.includes('?') ? '&' : '?'}token=${jwtToken}';
+          </script>
+        </body></html>
+      `);
+    }
+
+    setCookie(c, 'sso_session', jwtToken, {
+      path: '/',
+      secure: true,
+      httpOnly: true,
+      sameSite: 'Lax',
+      maxAge: userToAuth.cookie_expiry_days * 86400
+    });
+
+    return c.html(`
+      <html><body>
+        <script>
+          localStorage.setItem('sso_admin_auth', 'Bearer ${jwtToken}');
+          window.location.href = '/?token=${jwtToken}';
+        </script>
+      </body></html>
+    `);
+  }
+
+  return c.text('Unknown action', 400);
+});
+
 
 // --- Admin Routes ---
 
 // Apply basic auth to all /admin/* routes
 app.use('/admin/*', async (c, next) => {
+  const authHeader = c.req.header('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const payload = await verifyJWT(token, c.env.JWT_SECRET);
+      if (payload.uuid === 'admin') {
+        return next();
+      }
+    } catch (e) { }
+  }
+
   const auth = basicAuth({
     username: c.env.ADMIN_USERNAME,
     password: c.env.ADMIN_PASSWORD,
@@ -219,7 +418,7 @@ app.use('/admin/*', async (c, next) => {
 
 // Users CRUD
 app.get('/admin/users', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT user_id, uuid, username, name, status, cookie_expiry_days, password_plain, created_at FROM users').all();
+  const { results } = await c.env.DB.prepare('SELECT user_id, uuid, username, name, status, cookie_expiry_days, password_plain, created_at, github_id FROM users').all();
   return c.json(results);
 });
 

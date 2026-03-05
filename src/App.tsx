@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink } from 'lucide-react';
+import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github } from 'lucide-react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
+import SsoBinding from './SsoBinding';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
@@ -48,6 +49,14 @@ function Dashboard() {
     if (saved) {
       setAuthHeader(saved);
       setIsLogged(true);
+    }
+
+    // Check for github errors
+    const errorParam = searchParams.get('error');
+    if (errorParam === 'github_not_bound') {
+      alert('This GitHub account is not linked to any user.');
+    } else if (errorParam === 'account_paused') {
+      alert('Your account is paused.');
     }
   }, []);
 
@@ -319,6 +328,22 @@ function Dashboard() {
               >
                 Log In & Continue
               </motion.button>
+
+              <div className="flex items-center space-x-3 my-4 opacity-40">
+                <div className="flex-1 h-px bg-white"></div>
+                <span className="text-xs font-semibold uppercase tracking-widest">or</span>
+                <div className="flex-1 h-px bg-white"></div>
+              </div>
+
+              <motion.a
+                href={`${API_BASE}/api/github/login?app_redirect=${encodeURIComponent(ssoRedirect)}&app_id=${ssoAppId}`}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="w-full flex items-center justify-center gap-3 bg-[#171515] hover:bg-[#201e1e] text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-black/20 transition-all border border-white/10"
+              >
+                <Github className="w-6 h-6" />
+                Continue with Github
+              </motion.a>
             </form>
           )}
         </motion.div>
@@ -392,9 +417,19 @@ function Dashboard() {
               Auth Center
             </span>
           </div>
-          <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
-            <LogOut className="w-5 h-5" />
-          </motion.button>
+          <div className="flex items-center gap-2">
+            <motion.a
+              href={`${API_BASE}/api/github/login?admin_bind=admin`}
+              target="_blank" rel="noreferrer"
+              className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
+              title="Bind GitHub for Admin"
+            >
+              <Github className="w-5 h-5" />
+            </motion.a>
+            <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
+              <LogOut className="w-5 h-5" />
+            </motion.button>
+          </div>
         </div>
 
         <nav className="flex md:flex-col overflow-x-auto px-4 pb-2 md:mt-8 space-x-2 md:space-x-0 md:space-y-2 w-full no-scrollbar">
@@ -714,6 +749,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/:uuid/change-password" element={<ChangePassword />} />
+      <Route path="/:uuid/sso-binding" element={<SsoBinding />} />
       <Route path="/*" element={<Dashboard />} />
     </Routes>
   );

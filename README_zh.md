@@ -34,7 +34,20 @@ npm run build
 npx wrangler deploy
 ```
 
-## 2. API 使用指南
+## 2. GitHub SSO 鉴权集成（强烈推荐）
+
+系统已深度内置 GitHub OAuth 鉴权，分别支持管理后台快速登录以及子应用授权跳转（登录界面提供“使用 GitHub 继续”按钮）。请在 `wrangler.toml` 的 `[vars]` 区域添加或配置环境变量：
+
+```toml
+GITHUB_CLIENT_ID = "您的_github_oauth_app客户端id"
+GITHUB_CLIENT_SECRET = "您的_github_oauth_app客户端秘钥"
+ADMIN_GITHUB_ID = "您的_github数字ID"
+```
+- 普通用户：可以由管理员下发生成的 `Copy GitHub Bind Link` 专属绑定链接绑定自己的身份。
+- 站长（Admin）：可直接点击内部右上角的 GitHub 图标通过 `ADMIN_GITHUB_ID` 白名单比对完成绑定。
+- 若作为跳转鉴权模式（带 `app_redirect` 参数），原有的登录窗口下方会自动加载使用 GitHub 登录的快捷按钮。
+
+## 3. API 与后台使用指南
 
 所有的 `/admin/*` 路由均受 Basic 鉴权保护。你需要在 `wrangler.toml` 设置 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD` 这对默认管理员密码。
 
@@ -143,7 +156,7 @@ async function requireSSO(req, res, next) {
 
 ---
 
-## 3. 子应用退出登录 → 同步退出 Auth Center
+## 4. 子应用退出登录 → 同步退出 Auth Center
 
 当用户在子应用点击退出（Sign Out）时，应**同时清除 Auth Center 的 SSO 会话 Cookie**。
 

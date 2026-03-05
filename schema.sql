@@ -12,6 +12,7 @@ CREATE TABLE users (
     password_plain TEXT,
     status TEXT NOT NULL DEFAULT 'active', -- 'active' or 'paused'
     cookie_expiry_days INTEGER NOT NULL DEFAULT 7,
+    github_id TEXT UNIQUE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

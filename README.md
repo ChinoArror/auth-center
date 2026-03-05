@@ -41,7 +41,20 @@ npm run build
 npx wrangler deploy
 ```
 
-## 2. Admin API Usage
+## 2. GitHub SSO Integration (Optional but Recommended)
+
+You can enable GitHub Single Sign-On for both your admin account and end-users. Add the following to your `wrangler.toml` `[vars]` section or set them as Cloudflare environment secrets:
+
+```toml
+GITHUB_CLIENT_ID = "your_github_oauth_app_client_id"
+GITHUB_CLIENT_SECRET = "your_github_oauth_app_client_secret"
+ADMIN_GITHUB_ID = "your_github_account_numeric_id"
+```
+- A user can bind their GitHub identity via the "Copy GitHub Bind Link" button in their admin-managed `UserProfile`. 
+- Admin can bind it by clicking the GitHub icon in the top right of the Admin Dashboard.
+- Sub-apps using the standard SSO redirection mode will automatically surface a "Continue with Github" option if `app_redirect` is present.
+
+## 3. Admin API Usage
 
 The Admin API is protected by Basic Auth. Use the `ADMIN_USERNAME` and `ADMIN_PASSWORD` defined in your `wrangler.toml` (or set them as secrets via `wrangler secret put`).
 
@@ -91,7 +104,7 @@ curl -X POST https://<your-worker-url>/admin/permissions \
   -d '{"uuid": "<user_uuid>", "app_id": "english-assistant"}'
 ```
 
-## 3. Sub-App Integration Guide
+## 4. Sub-App Integration Guide
 
 ### User Login
 
@@ -154,7 +167,7 @@ The page verifies the old password before allowing the update. You can copy the 
 
 ---
 
-## 4. Sign-Out Integration (Sub-App → Auth Center)
+## 5. Sign-Out Integration (Sub-App → Auth Center)
 
 When a user signs out of a sub-app, you should **also** invalidate their Auth Center session cookie. This ensures:
 - The next time they click "Login" on any sub-app, they will be prompted to log in again (no silent auto-redirect).
@@ -234,7 +247,7 @@ app.post('/api/signout', async (c) => {
 
 ---
 
-## 5. WebApp Integration Code Examples
+## 6. WebApp Integration Code Examples
 
 Here is how you can practically adapt your other web applications (frontend and backend) to use this SSO center.
 
@@ -249,7 +262,7 @@ function loginWithSSO() {
   const APP_ID = 'your-app-id'; // Your registered app in the dashboard
   const RETURN_URL = window.location.origin + '/sso-callback'; 
   
-  // 1. Redirect to Auth Center
+  // 1. Redirect to Auth Center (with SSO credentials + Github Login option)
   window.location.href = `${SSO_URL}/?client_id=${APP_ID}&redirect=${encodeURIComponent(RETURN_URL)}`;
 }
 ```
