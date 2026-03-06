@@ -18,6 +18,9 @@ CF_ACCOUNT_ID = "3903d3554a2e7453ce23f44bc989fe6b"
 GITHUB_CLIENT_ID = "Ov23liJvxA7wU7FRkMf7"
 GITHUB_CLIENT_SECRET = "e4a2e1950bedb3be7b7d89474e5f216fef6dba6f"
 ADMIN_GITHUB_ID = "103983438"
+# 在 wrangler.toml 中补充您的 Cloudflare API Token
+CF_API_TOKEN = "IjsRFQga4uuLcpxL8ZZmfmttD62Ia-zhtQIWm26N"
+
 
 [[d1_databases]]
 binding = "DB"

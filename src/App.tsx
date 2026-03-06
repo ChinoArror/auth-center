@@ -191,11 +191,11 @@ function Dashboard() {
     setLoadingStats(true);
     try {
       const query = `
-        query getAnalytics($accountTag: string!) {
+        query getAnalytics($accountTag: String!) {
           viewer {
             accounts(filter: {accountTag: $accountTag}) {
               analyticsEngineEventsAdaptiveGroups(
-                filter: { dataset: "auth-center" },
+                filter: { dataset: "auth-center", datetime_geq: "2024-01-01T00:00:00Z" },
                 limit: 1000
               ) {
                 sum {
