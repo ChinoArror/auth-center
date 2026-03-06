@@ -1,4 +1,4 @@
-# SSO & Analytics System (Cloudflare Workers)
+# SSO & Analytics System (Cloudflare Workers)1
 
 This is a unified Single Sign-On (SSO) and Analytics system built on Cloudflare Workers, D1, and Workers Analytics Engine. It provides centralized authentication and usage tracking for multiple web applications.
 
