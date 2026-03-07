@@ -157,6 +157,54 @@ app.get('/api/verify', async (c) => {
   }
 });
 
+// Quota Check
+app.get('/api/quota/check', async (c) => {
+  const uuid = c.req.query('uuid');
+  const appId = c.req.query('app_id');
+  const authHeader = c.req.header('Authorization');
+  const secret = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+  if (!uuid || !appId || !secret) return c.json({ error: 'Missing uuid, app_id or secret' }, 400);
+
+  const appRecord: any = await c.env.DB.prepare('SELECT secret_key FROM apps WHERE app_id = ?').bind(appId).first();
+  if (!appRecord || appRecord.secret_key !== secret) return c.json({ error: 'Unauthorized' }, 401);
+
+  const quota: any = await c.env.DB.prepare('SELECT * FROM user_apps WHERE uuid = ? AND app_id = ?').bind(uuid, appId).first();
+  if (!quota) return c.json({ error: 'Permission denied' }, 403);
+
+  const today = new Date().toISOString().split('T')[0];
+  if (quota.last_reset_date !== today) {
+    await c.env.DB.prepare('UPDATE user_apps SET used_tokens_today = 0, used_requests_today = 0, last_reset_date = ? WHERE uuid = ? AND app_id = ?').bind(today, uuid, appId).run();
+    quota.used_tokens_today = 0;
+    quota.used_requests_today = 0;
+  }
+
+  if (quota.daily_token_limit && quota.used_tokens_today >= quota.daily_token_limit) {
+    return c.json({ error: 'Token limit exceeded' }, 429);
+  }
+  if (quota.rpd_limit && quota.used_requests_today >= quota.rpd_limit) {
+    return c.json({ error: 'Daily request limit exceeded' }, 429);
+  }
+
+  return c.json({ valid: true, quota });
+});
+
+// Quota Consume
+app.post('/api/quota/consume', async (c) => {
+  const { uuid, app_id, tokens = 0 } = await c.req.json();
+  const authHeader = c.req.header('Authorization');
+  const secret = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+  if (!uuid || !app_id || !secret) return c.json({ error: 'Missing fields' }, 400);
+
+  const appRecord: any = await c.env.DB.prepare('SELECT secret_key FROM apps WHERE app_id = ?').bind(app_id).first();
+  if (!appRecord || appRecord.secret_key !== secret) return c.json({ error: 'Unauthorized' }, 401);
+
+  await c.env.DB.prepare('UPDATE user_apps SET used_tokens_today = used_tokens_today + ?, used_requests_today = used_requests_today + 1 WHERE uuid = ? AND app_id = ?').bind(tokens, uuid, app_id).run();
+
+  return c.json({ success: true });
+});
+
 // Track Analytics
 app.post('/api/track', async (c) => {
   const { app_id, uuid, event_type, duration_seconds } = await c.req.json();
@@ -534,6 +582,17 @@ app.delete('/admin/permissions', async (c) => {
   const { uuid, app_id } = await c.req.json();
   await c.env.DB.prepare('DELETE FROM user_apps WHERE uuid = ? AND app_id = ?').bind(uuid, app_id).run();
   return c.json({ success: true });
+});
+
+app.put('/admin/permissions/quota', async (c) => {
+  const { uuid, app_id, rpm_limit, rpd_limit, daily_token_limit } = await c.req.json();
+  try {
+    await c.env.DB.prepare('UPDATE user_apps SET rpm_limit = ?, rpd_limit = ?, daily_token_limit = ? WHERE uuid = ? AND app_id = ?')
+      .bind(rpm_limit || null, rpd_limit || null, daily_token_limit || null, uuid, app_id).run();
+    return c.json({ success: true });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 400);
+  }
 });
 
 // Analytics Stats (GraphQL Proxy)

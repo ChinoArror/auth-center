@@ -20,6 +20,9 @@ function Dashboard() {
   const [permissions, setPermissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // Quota Modal
+  const [quotaModal, setQuotaModal] = useState<any>(null);
+
   // Stats state
   const [statsData, setStatsData] = useState<any>(null);
   const [loadingStats, setLoadingStats] = useState(false);
@@ -194,7 +197,7 @@ function Dashboard() {
         query getAnalytics($accountTag: String!) {
           viewer {
             accounts(filter: {accountTag: $accountTag}) {
-              analyticsEngineEventsAdaptiveGroups(
+              workersAnalyticsEngineAdaptiveGroups(
                 filter: { dataset: "auth-center", datetime_geq: "2024-01-01T00:00:00Z" },
                 limit: 1000
               ) {
@@ -283,6 +286,32 @@ function Dashboard() {
       body: JSON.stringify({ uuid, app_id })
     });
     if (res.ok) fetchPermissions();
+  };
+
+  const updateQuota = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    const rpm = fd.get('rpm_limit');
+    const rpd = fd.get('rpd_limit');
+    const token = fd.get('daily_token_limit');
+
+    const res = await authFetch('/admin/permissions/quota', {
+      method: 'PUT',
+      body: JSON.stringify({
+        uuid: quotaModal.uuid,
+        app_id: quotaModal.app_id,
+        rpm_limit: rpm ? parseInt(rpm as string, 10) : null,
+        rpd_limit: rpd ? parseInt(rpd as string, 10) : null,
+        daily_token_limit: token ? parseInt(token as string, 10) : null
+      })
+    });
+    if (res.ok) {
+      setQuotaModal(null);
+      fetchPermissions();
+    } else {
+      alert('Failed to update quota');
+    }
   };
 
   if (ssoMode) {
@@ -646,19 +675,33 @@ function Dashboard() {
                               </div>
                             </td>
                             {apps.map(app => {
-                              const hasAccess = permissions.some(p => p.uuid === user.uuid && p.app_id === app.app_id);
+                              const perm = permissions.find(p => p.uuid === user.uuid && p.app_id === app.app_id);
+                              const hasAccess = !!perm;
                               return (
                                 <td key={`${user.uuid}-${app.app_id}`} className="p-4 border-b border-white/5 text-center border-l border-white/5">
-                                  <motion.button
-                                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                                    onClick={() => togglePermission(user.uuid, app.app_id, hasAccess)}
-                                    className={`relative inline-flex items-center justify-center p-2 rounded-xl transition-all ${hasAccess
-                                      ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:bg-emerald-500/30 ring-1 ring-emerald-500/50'
-                                      : 'bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/50 ring-1 ring-white/10'
-                                      }`}
-                                  >
-                                    {hasAccess ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5 opacity-40" />}
-                                  </motion.button>
+                                  <div className="flex items-center justify-center gap-2">
+                                    <motion.button
+                                      whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                                      onClick={() => togglePermission(user.uuid, app.app_id, hasAccess)}
+                                      className={`relative inline-flex items-center justify-center p-2 rounded-xl transition-all ${hasAccess
+                                        ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:bg-emerald-500/30 ring-1 ring-emerald-500/50'
+                                        : 'bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/50 ring-1 ring-white/10'
+                                        }`}
+                                    >
+                                      {hasAccess ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5 opacity-40" />}
+                                    </motion.button>
+
+                                    {hasAccess && (
+                                      <motion.button
+                                        whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                                        onClick={() => setQuotaModal({ uuid: user.uuid, app_id: app.app_id, user_name: user.name, app_name: app.app_name, rpm_limit: perm.rpm_limit, rpd_limit: perm.rpd_limit, daily_token_limit: perm.daily_token_limit })}
+                                        className="p-2 bg-blue-500/20 text-blue-400 rounded-xl hover:bg-blue-500/30 ring-1 ring-blue-500/50 transition-colors"
+                                        title="Configure Limits"
+                                      >
+                                        <Settings className="w-5 h-5" />
+                                      </motion.button>
+                                    )}
+                                  </div>
                                 </td>
                               );
                             })}
@@ -672,7 +715,7 @@ function Dashboard() {
             )}
 
             {activeTab === 'statistics' && (() => {
-              const events = statsData?.data?.viewer?.accounts?.[0]?.analyticsEngineEventsAdaptiveGroups || [];
+              const events = statsData?.data?.viewer?.accounts?.[0]?.workersAnalyticsEngineAdaptiveGroups || [];
               const totalDuration = events.reduce((acc: number, curr: any) => acc + (curr.sum?.double1 || 0), 0);
               const totalEvents = events.reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
               const browsers = events.reduce((acc: any, curr: any) => {
@@ -726,6 +769,45 @@ function Dashboard() {
             })()}
           </motion.div>
         </AnimatePresence>
+
+        {quotaModal && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
+              className="bg-[#0B0F19] border border-white/10 rounded-3xl p-6 w-full max-w-md shadow-2xl relative"
+            >
+              <button
+                onClick={() => setQuotaModal(null)}
+                className="absolute top-4 right-4 text-white/50 hover:text-white p-2 rounded-xl hover:bg-white/10 transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <h2 className="text-2xl font-bold mb-1 text-blue-300">Usage Limits</h2>
+              <p className="text-white/50 text-sm mb-6 pb-4 border-b border-white/10">Configure quota for {quotaModal.user_name} on {quotaModal.app_name}</p>
+
+              <form onSubmit={updateQuota} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1">Requests Per Minute (RPM)</label>
+                  <input name="rpm_limit" type="number" defaultValue={quotaModal.rpm_limit ?? ''} placeholder="Unlimited" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1">Requests Per Day (RPD)</label>
+                  <input name="rpd_limit" type="number" defaultValue={quotaModal.rpd_limit ?? ''} placeholder="Unlimited" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1">Tokens Per Day</label>
+                  <input name="daily_token_limit" type="number" defaultValue={quotaModal.daily_token_limit ?? ''} placeholder="Unlimited" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20" />
+                </div>
+
+                <div className="pt-4 flex justify-end gap-3">
+                  <button type="button" onClick={() => setQuotaModal(null)} className="px-5 py-2.5 rounded-xl border border-white/10 hover:bg-white/5 transition-colors">Cancel</button>
+                  <button type="submit" className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-lg transition-colors">Save Quota</button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
       </main>
     </div>
   );

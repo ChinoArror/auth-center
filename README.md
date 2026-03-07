@@ -319,3 +319,22 @@ app.get('/api/secure-data', requireSSO, (req, res) => {
   res.json({ message: `Welcome ${req.user.name}` });
 });
 ```
+
+---
+
+## 7. AI API Quota & Rate Limiting System
+
+The Auth Center now deeply integrates an **API Gateway / Quota Engine** architecture, allowing you to regulate Sub-App requests for premium APIs (e.g., LLM Tokens). 
+
+In the Admin Dashboard (`Permissions` tab), click the `Settings` (gear) icon to configure the following limits per user, per application:
+- **RPM (Requests Per Minute)**: Maximum queries per minute.
+- **RPD (Requests Per Day)**: Maximum queries per 24 hours.
+- **Tokens Per Day**: Maximum amount of permitted daily Token consumption.
+
+### Integrating the Quota Engine
+Within your Sub-App codebase, intercept incoming API requests and call the Pre-check and Post-consume endpoints:
+
+- **Pre-check:** `GET /api/quota/check?uuid=<uuid>&app_id=<app_id>` (Call this *before* making the LLM request to ensure limits aren't exceeded).
+- **Post-consume:** `POST /api/quota/consume` (Call this *after* the request is complete to deduct the true token usage).
+
+> 💡 **Developer Integration Guide:** For full code examples on performing Quota pre-checks and post-deductions inside a worker, please refer to the [way1.md](./way1.md) guide.

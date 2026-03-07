@@ -28,6 +28,12 @@ CREATE TABLE user_apps (
     uuid TEXT NOT NULL,
     app_id TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    rpm_limit INTEGER,
+    rpd_limit INTEGER,
+    daily_token_limit INTEGER,
+    used_tokens_today INTEGER DEFAULT 0,
+    used_requests_today INTEGER DEFAULT 0,
+    last_reset_date TEXT,
     PRIMARY KEY (uuid, app_id),
     FOREIGN KEY (uuid) REFERENCES users(uuid) ON DELETE CASCADE,
     FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE

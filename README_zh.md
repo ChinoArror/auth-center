@@ -241,4 +241,24 @@ app.post('/api/signout', async (c) => {
 
 ---
 
+## 5. 大模型 API 用量控制与限频 (Quota & Rate Limiting)
+
+系统现在在原有身份鉴权的基础上，深度集成了 **用量控制引擎 (API Gateway)** 的能力：
+非常适合使用大模型 (LLMs) 等按 Token/请求计费的 SubApp 子应用接入。
+
+在管理后台（Permissions 页面），管理员可以通过 `Settings` (齿轮) 图标，针对具体应用和具体用户单独配置以下额度：
+- **RPM (Requests Per Minute)**: 每分钟发送消息请求的 QPS 上限。
+- **RPD (Requests Per Day)**: 每天会话发送总次数上限。
+- **Tokens Per Day**: 每天允许使用的 Token 消耗总量上限（LLM 场景）。
+
+### 对接用量引擎
+请在你的子应用 (SubApp) 代码逻辑中，分别接入 Auth-Center 提供的**前置校验 (Pre-check)** 和 **后置消费上报 (Post-deduction)** 接口：
+
+- **Pre-check:** `GET /api/quota/check?uuid=<uuid>&app_id=<app_id>` (发起 AI 请求前确认是否超时或超频)
+- **Post-consume:** `POST /api/quota/consume` (收到 AI 响应后记录并累加消耗的 token 值)
+
+> 💡 **详细开发对接教程**，请查阅根目录下的 [way1.md](./way1.md) 指南文件。
+
+---
+
 更多配置详见源码 `src/` 结构与 `wrangler.toml` 环境设置。
