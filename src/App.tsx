@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github } from 'lucide-react';
+import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github, Zap, Globe, Database, Code2, Box, Layers, Cpu, Rocket, Star, Sparkles, Bot, Wifi, Lock, Palette } from 'lucide-react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
@@ -8,10 +8,19 @@ import SsoBinding from './SsoBinding';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
+// Consistent icon picker: same app_id always gets same icon
+const APP_ICONS = [Zap, Globe, Database, Code2, Box, Layers, Cpu, Rocket, Star, Sparkles, Bot, Wifi, Lock, Palette, Shield, BarChart3] as const;
+function getAppIcon(appId: string) {
+  let hash = 0;
+  for (let i = 0; i < appId.length; i++) hash = (hash * 31 + appId.charCodeAt(i)) >>> 0;
+  return APP_ICONS[hash % APP_ICONS.length];
+}
+
 function Dashboard() {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [isLogged, setIsLogged] = useState(false);
   const [authHeader, setAuthHeader] = useState('');
+  const [adminName, setAdminName] = useState('');
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState('users');
@@ -52,6 +61,7 @@ function Dashboard() {
     if (saved) {
       setAuthHeader(saved);
       setIsLogged(true);
+      setAdminName(localStorage.getItem('sso_admin_name') || 'Admin');
     }
 
     // Check for github errors
@@ -109,7 +119,9 @@ function Dashboard() {
       .then(res => {
         if (res.ok) {
           localStorage.setItem('sso_admin_auth', header);
+          localStorage.setItem('sso_admin_name', credentials.username);
           setAuthHeader(header);
+          setAdminName(credentials.username);
           setIsLogged(true);
         } else {
           alert('Invalid credentials');
@@ -288,29 +300,38 @@ function Dashboard() {
     if (res.ok) fetchPermissions();
   };
 
+  const parseLimit = (val: FormDataEntryValue | null): number | null => {
+    if (!val || (val as string).trim() === '') return null;
+    const n = parseInt(val as string, 10);
+    return isNaN(n) ? null : n;
+  };
+
   const updateQuota = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
-    const rpm = fd.get('rpm_limit');
-    const rpd = fd.get('rpd_limit');
-    const token = fd.get('daily_token_limit');
+    const rpm = parseLimit(fd.get('rpm_limit'));
+    const rpd = parseLimit(fd.get('rpd_limit'));
+    const tokenK = parseLimit(fd.get('daily_token_limit_k'));
+    // convert k → raw tokens
+    const dailyTokenLimit = tokenK !== null ? tokenK * 1000 : null;
 
     const res = await authFetch('/admin/permissions/quota', {
       method: 'PUT',
       body: JSON.stringify({
         uuid: quotaModal.uuid,
         app_id: quotaModal.app_id,
-        rpm_limit: rpm ? parseInt(rpm as string, 10) : null,
-        rpd_limit: rpd ? parseInt(rpd as string, 10) : null,
-        daily_token_limit: token ? parseInt(token as string, 10) : null
+        rpm_limit: rpm,
+        rpd_limit: rpd,
+        daily_token_limit: dailyTokenLimit
       })
     });
     if (res.ok) {
       setQuotaModal(null);
       fetchPermissions();
     } else {
-      alert('Failed to update quota');
+      const errData = await res.json().catch(() => ({}));
+      alert('Failed to update quota: ' + (errData.error || res.status));
     }
   };
 
@@ -437,28 +458,43 @@ function Dashboard() {
         initial={{ opacity: 0 }} animate={{ opacity: 1 }}
         className="w-full md:w-72 bg-white/5 backdrop-blur-3xl border-b md:border-b-0 md:border-r border-white/10 flex flex-col z-10 relative flex-shrink-0"
       >
-        <div className="p-4 md:p-8 md:pb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl shadow-lg shadow-purple-500/20">
-              <Activity className="w-6 h-6 text-white" />
+        <div className="p-4 md:p-8 md:pb-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl shadow-lg shadow-purple-500/20">
+                <Activity className="w-6 h-6 text-white" />
+              </div>
+              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-200">
+                Auth Center
+              </span>
             </div>
-            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-200">
-              Auth Center
-            </span>
+            <div className="flex items-center gap-2">
+              <motion.a
+                href={`${API_BASE}/api/github/login?admin_bind=admin`}
+                target="_blank" rel="noreferrer"
+                className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
+                title="Bind GitHub for Admin"
+              >
+                <Github className="w-5 h-5" />
+              </motion.a>
+              <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
+                <LogOut className="w-5 h-5" />
+              </motion.button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <motion.a
-              href={`${API_BASE}/api/github/login?admin_bind=admin`}
-              target="_blank" rel="noreferrer"
-              className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
-              title="Bind GitHub for Admin"
+          {adminName && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="mt-4 px-1"
             >
-              <Github className="w-5 h-5" />
-            </motion.a>
-            <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
-              <LogOut className="w-5 h-5" />
-            </motion.button>
-          </div>
+              <p className="text-xs text-white/40 font-medium uppercase tracking-widest mb-0.5">Welcome back</p>
+              <p className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-300 to-blue-300">
+                Hi, {adminName} 👋
+              </p>
+            </motion.div>
+          )}
         </div>
 
         <nav className="flex md:flex-col overflow-x-auto px-4 pb-2 md:mt-8 space-x-2 md:space-x-0 md:space-y-2 w-full no-scrollbar">
@@ -616,9 +652,13 @@ function Dashboard() {
                         >
                           <div>
                             <div className="flex justify-between items-start mb-4">
-                              <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-xl">
-                                <LayoutGrid className="w-6 h-6" />
-                              </div>
+                              {(() => {
+                                const Icon = getAppIcon(a.app_id); return (
+                                  <div className="p-3 bg-gradient-to-br from-purple-500/20 to-blue-500/20 text-purple-300 rounded-xl">
+                                    <Icon className="w-6 h-6" />
+                                  </div>
+                                );
+                              })()}
                               <motion.button
                                 whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
                                 onClick={() => deleteApp(a.app_id)}
@@ -796,8 +836,17 @@ function Dashboard() {
                   <input name="rpd_limit" type="number" defaultValue={quotaModal.rpd_limit ?? ''} placeholder="Unlimited" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-white/70 mb-1">Tokens Per Day</label>
-                  <input name="daily_token_limit" type="number" defaultValue={quotaModal.daily_token_limit ?? ''} placeholder="Unlimited" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20" />
+                  <label className="block text-sm font-medium text-white/70 mb-1">Tokens Per Day (k)</label>
+                  <input
+                    name="daily_token_limit_k"
+                    type="number"
+                    defaultValue={quotaModal.daily_token_limit != null ? Math.round(quotaModal.daily_token_limit / 1000) : ''}
+                    placeholder="Unlimited"
+                    min="0"
+                    step="1"
+                    className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder-white/20"
+                  />
+                  <p className="text-xs text-white/30 mt-1">Enter in thousands. e.g. 100 = 100k tokens/day</p>
                 </div>
 
                 <div className="pt-4 flex justify-end gap-3">

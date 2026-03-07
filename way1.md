@@ -6,6 +6,9 @@
 1. 在向大模型（如 OpenAI、Anthropic）发起请求前，向 Auth-Center 校验当前用户是否有权发送请求，以及是否超过了设定的频率或 Token 消耗。
 2. 在大模型返回数据后，统计真实消耗的 Token 并在 Auth-Center 扣除。
 3. 身份验证使用 SubApp 在 Auth-Center 注册的 `app_id` 和专属 `secret_key`，确保安全性。
+4. **重要设计：** `/api/quota/consume` 接口不做额度校验，始终成功。这意味着已经开始的请求（包括流式输出）不会被中途打断，即使本次使用量超过了剩余额度。下一次 Pre-check 才会发现额度耗尽并拦截新请求。
+
+> **Token 单位：** 管理面板中 "Tokens Per Day (k)" 输入的是以 k（千）为单位，例如填写 `100` = 100,000 tokens/day。API 接口中 `daily_token_limit`、`used_tokens_today` 均为实际 token 数（整数）。
 
 ## 2. 从 Auth-Center 获取配置
 
@@ -47,7 +50,9 @@ async function checkQuota(uuid) {
   }
   
   // 校验通过，可以继续请求大模型
-  return true;
+  // 返回值包含 remaining_tokens（剩余 token 数，null 表示无限制）
+  const data = await response.json();
+  return data; // { valid: true, quota, remaining_tokens: number|null, remaining_requests: number|null }
 }
 ```
 
@@ -118,3 +123,108 @@ export default {
 * **权限不足 (403):** 确保在 Auth-Center 的 `Permissions` 页面为该用户勾选了对应应用。
 * **密码不匹配 (401):** 检查 `env.SECRET_KEY` 是否和在 Auth-Center `Apps` 里配置的完全一致。
 * **重置时间:** 默认 Auth-Center 是对每日用量 (`used_tokens_today` 和 `used_requests_today`) 按 UTC/服务器本地时间跨天重置。
+
+---
+
+## 6. 如何精准获取 Token 用量
+
+### A. OpenAI / 兼容接口（非流式）
+
+非流式响应中，`usage` 字段直接包含在响应体里：
+
+```javascript
+const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'gpt-4o', messages: [...] })
+});
+const data = await res.json();
+
+// 精准 token 数
+const totalTokens = data.usage.total_tokens;
+// 或分别：
+const promptTokens = data.usage.prompt_tokens;
+const completionTokens = data.usage.completion_tokens;
+```
+
+### B. OpenAI 流式输出（SSE）
+
+流式模式下默认不返回 usage。需要加 `stream_options: { include_usage: true }`，此后 **最后一个 chunk** 会携带完整 usage：
+
+```javascript
+const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  body: JSON.stringify({
+    model: 'gpt-4o',
+    messages: [...],
+    stream: true,
+    stream_options: { include_usage: true }  // ← 关键参数
+  })
+});
+
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let totalTokens = 0;
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '));
+  for (const line of lines) {
+    const json = line.slice(6);
+    if (json === '[DONE]') continue;
+    const chunk = JSON.parse(json);
+    if (chunk.usage) {
+      totalTokens = chunk.usage.total_tokens; // 最后一个 chunk
+    }
+    // 正常处理 chunk.choices[0].delta.content ...
+  }
+}
+// 流结束后上报
+ctx.waitUntil(consumeQuota(uuid, totalTokens));
+```
+
+### C. Anthropic Claude
+
+```javascript
+const res = await fetch('https://api.anthropic.com/v1/messages', {
+  method: 'POST',
+  headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'claude-3-5-sonnet-20241022', max_tokens: 1024, messages: [...] })
+});
+const data = await res.json();
+
+const inputTokens = data.usage.input_tokens;
+const outputTokens = data.usage.output_tokens;
+const totalTokens = inputTokens + outputTokens;
+```
+
+Anthropic 流式：监听 `message_delta` 事件中的 `usage.output_tokens` 以及 `message_start` 事件中的 `usage.input_tokens`：
+
+```javascript
+// 在流中累计
+let inputTokens = 0, outputTokens = 0;
+// 遇到 event: message_start → data.message.usage.input_tokens
+// 遇到 event: message_delta → data.usage.output_tokens
+const totalTokens = inputTokens + outputTokens;
+```
+
+### D. Google Gemini
+
+```javascript
+const data = await res.json();
+const totalTokens = data.usageMetadata.totalTokenCount;
+// 或分别：
+// data.usageMetadata.promptTokenCount
+// data.usageMetadata.candidatesTokenCount
+```
+
+### 汇总
+
+| 提供商 | 非流式字段 | 流式获取方式 |
+|---|---|---|
+| OpenAI | `data.usage.total_tokens` | `stream_options.include_usage: true`，最后 chunk 的 `usage` |
+| Anthropic | `data.usage.input_tokens + output_tokens` | `message_start` + `message_delta` 事件 |
+| Google Gemini | `data.usageMetadata.totalTokenCount` | 最后 chunk 的 `usageMetadata` |
+
+> **建议：** 使用 `ctx.waitUntil(consumeQuota(...))` 异步上报，不阻塞流式响应的传输速度。

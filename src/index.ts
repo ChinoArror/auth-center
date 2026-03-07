@@ -169,8 +169,18 @@ app.get('/api/quota/check', async (c) => {
   const appRecord: any = await c.env.DB.prepare('SELECT secret_key FROM apps WHERE app_id = ?').bind(appId).first();
   if (!appRecord || appRecord.secret_key !== secret) return c.json({ error: 'Unauthorized' }, 401);
 
+  // Admin always has unlimited quota — skip all checks
+  if (uuid === 'admin') {
+    return c.json({ valid: true, unlimited: true, remaining_tokens: null, remaining_requests: null });
+  }
+
   const quota: any = await c.env.DB.prepare('SELECT * FROM user_apps WHERE uuid = ? AND app_id = ?').bind(uuid, appId).first();
   if (!quota) return c.json({ error: 'Permission denied' }, 403);
+
+  // If no quota is configured at all, deny by default (admin must set limits first)
+  if (quota.rpm_limit == null && quota.rpd_limit == null && quota.daily_token_limit == null) {
+    return c.json({ error: '请设置用量限制' }, 403);
+  }
 
   const today = new Date().toISOString().split('T')[0];
   if (quota.last_reset_date !== today) {
@@ -179,6 +189,9 @@ app.get('/api/quota/check', async (c) => {
     quota.used_requests_today = 0;
   }
 
+  // Block only when quota is fully exhausted (>= limit).
+  // The consume endpoint never blocks, so in-flight requests always complete
+  // even if they push usage slightly past the limit.
   if (quota.daily_token_limit && quota.used_tokens_today >= quota.daily_token_limit) {
     return c.json({ error: 'Token limit exceeded' }, 429);
   }
@@ -186,8 +199,16 @@ app.get('/api/quota/check', async (c) => {
     return c.json({ error: 'Daily request limit exceeded' }, 429);
   }
 
-  return c.json({ valid: true, quota });
+  const remaining_tokens = quota.daily_token_limit
+    ? Math.max(0, quota.daily_token_limit - quota.used_tokens_today)
+    : null;
+  const remaining_requests = quota.rpd_limit
+    ? Math.max(0, quota.rpd_limit - quota.used_requests_today)
+    : null;
+
+  return c.json({ valid: true, quota, remaining_tokens, remaining_requests });
 });
+
 
 // Quota Consume
 app.post('/api/quota/consume', async (c) => {
