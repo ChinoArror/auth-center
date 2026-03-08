@@ -5,6 +5,7 @@ import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom'
 import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
 import SsoBinding from './SsoBinding';
+import AppDetails from './AppDetails';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
@@ -278,11 +279,23 @@ function Dashboard() {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
-    const res = await authFetch('/admin/apps', {
-      method: 'POST',
-      body: JSON.stringify(Object.fromEntries(fd.entries()))
-    });
-    if (res.ok) { fetchApps(); form.reset(); }
+    const body: any = Object.fromEntries(fd.entries());
+    body.use_agent_limit = body.use_agent_limit === 'on' ? true : false;
+
+    try {
+      const res = await authFetch('/admin/apps', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        fetchApps(); form.reset();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(`Failed to register app: ${errorData.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Network error: ${err.message}`);
+    }
   };
 
   const deleteApp = async (appId: string) => {
@@ -635,6 +648,12 @@ function Dashboard() {
                         <input name="app_name" placeholder="Display Name" required className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 outline-none transition-all placeholder-white/30" />
                         <input name="callback_url" placeholder="Callback URL (Optional)" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 outline-none transition-all placeholder-white/30" />
                         <input name="secret_key" placeholder="App Secret Key" required className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 outline-none transition-all placeholder-white/30" />
+
+                        <label className="flex items-center gap-3 bg-black/30 border border-white/5 p-3 rounded-xl cursor-pointer hover:bg-black/50 transition-colors">
+                          <input type="checkbox" name="use_agent_limit" className="w-5 h-5 accent-emerald-500 rounded focus:ring-emerald-500 focus:ring-2 bg-black/50 border-white/10" />
+                          <span className="text-sm font-medium text-emerald-300">是否使用agent 用量限制</span>
+                        </label>
+
                         <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-xl shadow-lg transition-colors mt-2">
                           Register Application
                         </motion.button>
@@ -650,7 +669,7 @@ function Dashboard() {
                           initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
                           className="bg-white/5 hover:bg-white/10 backdrop-blur-md border border-white/10 p-6 rounded-3xl flex flex-col justify-between transition-all group hover:shadow-2xl hover:shadow-emerald-500/10"
                         >
-                          <div>
+                          <Link to={`/app/${a.app_id}`} className="block h-full">
                             <div className="flex justify-between items-start mb-4">
                               {(() => {
                                 const Icon = getAppIcon(a.app_id); return (
@@ -661,16 +680,19 @@ function Dashboard() {
                               })()}
                               <motion.button
                                 whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                                onClick={() => deleteApp(a.app_id)}
-                                className="p-2 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                                onClick={(e) => { e.preventDefault(); deleteApp(a.app_id); }}
+                                className="p-2 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all pointer-events-auto"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </motion.button>
                             </div>
-                            <h4 className="font-bold text-xl mb-1 text-white">{a.app_name}</h4>
+                            <h4 className="font-bold text-xl mb-1 text-white flex items-center gap-2">
+                              {a.app_name}
+                              {a.use_agent_limit === 1 && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded uppercase font-bold tracking-wider">Limit On</span>}
+                            </h4>
                             <p className="text-xs font-mono text-emerald-300/70 mb-4">{a.app_id}</p>
                             {a.callback_url && <p className="text-sm text-white/50 bg-black/20 p-2 rounded-lg truncate" title={a.callback_url}>{a.callback_url}</p>}
-                          </div>
+                          </Link>
                         </motion.div>
                       ))
                     }
@@ -881,6 +903,7 @@ export default function App() {
     <Routes>
       <Route path="/:uuid/change-password" element={<ChangePassword />} />
       <Route path="/:uuid/sso-binding" element={<SsoBinding />} />
+      <Route path="/app/:appId" element={<AppDetails />} />
       <Route path="/*" element={<Dashboard />} />
     </Routes>
   );

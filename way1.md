@@ -1,230 +1,147 @@
-# SubApp 用量控制接入指南 (Quota & Rate Limiting)
+# SubApp Agent 用量控制与限频接入指南
 
-本指南针对已接入 Auth-Center 的 SubApp，说明如何增加使用大模型 API 等计费或限制频率服务时的前置配额检查（Pre-check）和后置扣费（Post-deduction）。
+本文档指导开发者如何将已对接 SSO 的子应用 (SubApp) 接入 Auth-Center 提供的**“Agent 用量限制”**功能，配置应用绑定以及相关代码拦截逻辑，从而有效监控与管理各大模型 API 的 Token 消耗与请求速率。
 
-## 1. 核心原理
-1. 在向大模型（如 OpenAI、Anthropic）发起请求前，向 Auth-Center 校验当前用户是否有权发送请求，以及是否超过了设定的频率或 Token 消耗。
-2. 在大模型返回数据后，统计真实消耗的 Token 并在 Auth-Center 扣除。
-3. 身份验证使用 SubApp 在 Auth-Center 注册的 `app_id` 和专属 `secret_key`，确保安全性。
-4. **重要设计：** `/api/quota/consume` 接口不做额度校验，始终成功。这意味着已经开始的请求（包括流式输出）不会被中途打断，即使本次使用量超过了剩余额度。下一次 Pre-check 才会发现额度耗尽并拦截新请求。
+## 1. 原理概述
 
-> **Token 单位：** 管理面板中 "Tokens Per Day (k)" 输入的是以 k（千）为单位，例如填写 `100` = 100,000 tokens/day。API 接口中 `daily_token_limit`、`used_tokens_today` 均为实际 token 数（整数）。
+1. **配额系统 (Quota Engine)** 是 Auth-Center 独立于基础身份验证 (SSO) 之外的第二层核心引擎。
+2. **只有开启了“用量限制”的应用**，流量与使用日志才会被系统收录与约束。一旦开启：
+   - 管理员必须主动为获得授权的用户设置对应的配额指标（RPM / RPD / Tokens Limit），**不配置限流指标的用户默认会被拒绝访问本应用**，只有系统 Admin 及获得明确限额（或设为无限额）的用户才能通行通过。
+   - 所有该应用的请求都会反馈在可视化分析图表（日历与用户的 Token 消耗量）中。
+3. **两步走逻辑设计**：
+   - 前置检查：在向大模型（如 OpenAI、Anthropic）发起请求前，向 Auth-Center API 校验当前用户是否有权发送请求，以及是否超过了上述的设限。
+   - 后置扣费：在 LLM 接口真实流出数据后，拿到具体使用的 Token 并在 Auth-Center 扣除。
+   - **平滑放行体验**：考虑到流式输出不可中断。`/api/quota/consume` 只是计费器，不做阻断，即使本次请求用量刚好超过剩余额度也会完成消费记录。系统的实际拦截动作均安排在下一次 Pre-check 校验中。
 
-## 2. 从 Auth-Center 获取配置
+## 2. 第一步：在管理后台完成配置绑定
 
-在 Auth-Center 的管理面板，点击 **Applications** 标签页。找到或注册你要接入的子应用，记录下两项信息：
-* `app_id`: 例如 `my_agent_app`
-* `secret_key`: 在注册该应用时填写的密钥
+### 1) 开启应用的 Agent 限制功能
+你需要以管理员身份登录 Auth-Center，去往 **Applications** 页面：
+- 若**注册新应用**，可以在表单最底端直接勾选 `开启 Agent 用量限制 (Enable Agent Limits)` 。
+- 若是已存在应用，点击应用名称进入 **App Details** (详情页)，勾选该项目的选项并点击右上角 `Save Changes` 更新变更。
 
-你需要将这两项保存在你的 SubApp 环境变量中（如 Cloudflare Workers 的 `.dev.vars` / `wrangler.toml`）。
+完成后请将其 `app_id`（如 `ai-english-tutor`）和 `secret_key` 提供给 SubApp 环境变量使用。
 
-## 3. 请求 Auth-Center 接口的代码规范
+### 2) 分配并设置限流项
+切换去往 **Permissions** 面板页面：
+1. 找到对应的用户勾选（授权）该 App 的准入权。
+2. 点击应用勾选框旁的蓝色 `Settings`（配置齿轮）图标，**按需填写该用户的用量限额**：
+   - **RPM (Requests Per Minute)**: 每分钟并发 / 频次限制。
+   - **RPD (Requests Per Day)**: 每日对话 / 请求数上限。
+   - **Tokens Per Day**: （最关键）万级/千级 Token 总量。这里填写的是 k 计算，例如配置 `100` 即 100k (100,000) Tokens 每日。
 
-在你的 SubApp 代码 (如 Worker 或 Node.js 后端) 中，你需要处理如下逻辑：
+## 3. 第二步：在代码中添加前置校验 (Pre-check)
 
-### A. 前置检查 (Pre-check)
-
-在收到前端对话请求，并解析出用户 `uuid` 后：
+在你的 SubApp 后端代码中，只要获取到正在操作对话的用户的 `uuid`，便能使用之前拿到的 `app_id` 与 `secret_key` 进行核验绑定：
 
 ```javascript
-// Auth-Center 的基础域名
-const AUTH_CENTER_URL = "https://your-auth-center-domain.com";
+const AUTH_CENTER_URL = "https://accounts.aryuki.com"; // 你的AuthCenter域名
 
 async function checkQuota(uuid) {
-  const url = `${AUTH_CENTER_URL}/api/quota/check?uuid=${uuid}&app_id=${env.APP_ID}`;
+  // 通过 Query 拼接传递 uuid 和被代理的 app_id
+  const url = `${AUTH_CENTER_URL}/api/quota/check?uuid=${uuid}&app_id=${env.YOUR_APP_ID}`;
   
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      "Authorization": `Bearer ${env.SECRET_KEY}`
+      // 通过 Header Bearer 方式提供你的专属子应用 secret_key 校验权
+      "Authorization": `Bearer ${env.YOUR_SECRET_KEY}`
     }
   });
 
   if (!response.ok) {
     if (response.status === 429) {
-      throw new Error("用量超限，请稍后再试或联系管理员增加额度");
+      throw new Error("配额超限：请今日稍后再试，或联系管理员增加使用额度。");
     } else if (response.status === 403) {
-      throw new Error("当前用户未获得该应用的访问权限");
+      const respError = await response.json();
+      throw new Error(respError.error || "当前账户似乎并未得到该服务应用的配额授权。");
+    } else if (response.status === 401) {
+      throw new Error("Secret_Key 应用密钥不匹配。");
     }
     throw new Error("权限校验失败：" + response.statusText);
   }
   
-  // 校验通过，可以继续请求大模型
-  // 返回值包含 remaining_tokens（剩余 token 数，null 表示无限制）
+  // 校验通过，可以继续向后游请求大模型了
+  // 这里也会返回该用户今天还剩余可用的一些剩余 Tokens，如果需要可以回传前端展示
   const data = await response.json();
-  return data; // { valid: true, quota, remaining_tokens: number|null, remaining_requests: number|null }
+  return data; // { valid: true, quota, remaining_tokens: 84000 }
 }
 ```
 
-### B. 后置扣费 (Post-deduction)
+## 4. 第三步：异步后置消费结算 (Post-deduction)
 
-在 LLM 返回了数据后，我们可以拿到 `usage` 比如 `prompt_tokens` 和 `completion_tokens`，接着发送给 Auth-Center 消费。
+在后端代码接收完 LLM 响应后，应尽力寻找结果体或最后一个 Chunk 的 `usage` 属性里的整体消耗，传回进行报表入账。
+
+考虑到大模型文本生成速度较慢，**建议你使用如 Cloudflare Workers 中的 `ctx.waitUntil(...)` 或是以不阻塞主线程的方法进行此步 API 操作，以免客户端产生响应滞后体验感！**
 
 ```javascript
 async function consumeQuota(uuid, totalTokens) {
   const url = `${AUTH_CENTER_URL}/api/quota/consume`;
   
-  // 可以选择使用 waitUntil 等机制异步发送，不阻塞主流程响应
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${env.SECRET_KEY}`
+      "Authorization": `Bearer ${env.YOUR_SECRET_KEY}`
     },
     body: JSON.stringify({
       uuid: uuid,
-      app_id: env.APP_ID,
-      tokens: totalTokens // 消耗的 token 数
+      app_id: env.YOUR_APP_ID,
+      tokens: totalTokens // 取自 LLM 结果的 total_tokens
     })
   });
 
   if (!response.ok) {
-    console.error("上报消耗失败", await response.text());
+    console.error("Auth Center 上报消耗记录入账失败：", await response.text());
   }
 }
 ```
-
-## 4. SubApp 综合示例
-
-```javascript
-export default {
-  async fetch(request, env, ctx) {
-    // 1. 获取并校验用户的 JWT
-    const token = request.headers.get("Authorization")?.replace("Bearer ", "");
-    // ...验证 token 逻辑，获取 user uuid
-    const userUuid = "xxxx-xxxx-xxxx-xxx"; 
-
-    // 2. 拦截并进行 Quota 检查
-    try {
-      await checkQuota(userUuid);
-    } catch (e) {
-      return new Response(e.message, { status: 429 });
-    }
-
-    // 3. 执行大模型请求
-    const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-       // ... openai 请求细节
-    });
-    
-    // 获取 LLM 计算结果（非流式示例）
-    const llmData = await llmResponse.json();
-    const usedTokens = llmData.usage?.total_tokens || 0;
-
-    // 4. 异步上报消耗 
-    // 若环境支持 ctx.waitUntil，能避免堵塞前端响应
-    ctx.waitUntil(consumeQuota(userUuid, usedTokens));
-
-    return Response.json(llmData.choices[0].message);
-  }
-}
-```
-
-## 5. 常见问题
-* **权限不足 (403):** 确保在 Auth-Center 的 `Permissions` 页面为该用户勾选了对应应用。
-* **密码不匹配 (401):** 检查 `env.SECRET_KEY` 是否和在 Auth-Center `Apps` 里配置的完全一致。
-* **重置时间:** 默认 Auth-Center 是对每日用量 (`used_tokens_today` 和 `used_requests_today`) 按 UTC/服务器本地时间跨天重置。
 
 ---
 
-## 6. 如何精准获取 Token 用量
+## 5. 各大平台 Token 精准获取（参考附录）
+
+不同厂商、流式与非流式环境统计真正 Token 消耗的手法有差异，此作为通用参考附录供前端/后端数据处理。
 
 ### A. OpenAI / 兼容接口（非流式）
-
-非流式响应中，`usage` 字段直接包含在响应体里：
-
+响应包结构 `usage` 存在于主级：
 ```javascript
-const res = await fetch('https://api.openai.com/v1/chat/completions', {
-  method: 'POST',
-  headers: { 'Authorization': `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ model: 'gpt-4o', messages: [...] })
-});
-const data = await res.json();
-
-// 精准 token 数
-const totalTokens = data.usage.total_tokens;
-// 或分别：
-const promptTokens = data.usage.prompt_tokens;
-const completionTokens = data.usage.completion_tokens;
+const totalTokens = data.usage.total_tokens; // 一般提取总和指标
 ```
 
-### B. OpenAI 流式输出（SSE）
-
-流式模式下默认不返回 usage。需要加 `stream_options: { include_usage: true }`，此后 **最后一个 chunk** 会携带完整 usage：
-
+### B. OpenAI 风格流式输出（SSE，例如 Deepseek 等同样适用）
+流式请求下**必须给请求载体添加** `stream_options`，才能拿到结尾数据：
 ```javascript
-const res = await fetch('https://api.openai.com/v1/chat/completions', {
-  method: 'POST',
-  body: JSON.stringify({
-    model: 'gpt-4o',
-    messages: [...],
-    stream: true,
-    stream_options: { include_usage: true }  // ← 关键参数
-  })
-});
+// POST 请求 body 参数设定
+{
+  model: 'gpt-4o',
+  messages: [...],
+  stream: true,
+  stream_options: { include_usage: true }  // ← 这项必带
+}
 
-const reader = res.body.getReader();
-const decoder = new TextDecoder();
-let totalTokens = 0;
-
+// ... 处理解码流
 while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '));
-  for (const line of lines) {
-    const json = line.slice(6);
-    if (json === '[DONE]') continue;
-    const chunk = JSON.parse(json);
-    if (chunk.usage) {
-      totalTokens = chunk.usage.total_tokens; // 最后一个 chunk
-    }
-    // 正常处理 chunk.choices[0].delta.content ...
+  // ...
+  const chunk = JSON.parse(jsonLine);
+  if (chunk.usage) {
+    // 最后发出的一个包往往没有任何 delta 返回文本，仅为纯粹带有 usage 统计。
+    totalTokens = chunk.usage.total_tokens;
   }
 }
-// 流结束后上报
-ctx.waitUntil(consumeQuota(uuid, totalTokens));
 ```
 
 ### C. Anthropic Claude
-
+Anthropic (非流式):
 ```javascript
-const res = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
-  headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-  body: JSON.stringify({ model: 'claude-3-5-sonnet-20241022', max_tokens: 1024, messages: [...] })
-});
-const data = await res.json();
-
-const inputTokens = data.usage.input_tokens;
-const outputTokens = data.usage.output_tokens;
-const totalTokens = inputTokens + outputTokens;
+const totalTokens = data.usage.input_tokens + data.usage.output_tokens;
 ```
 
-Anthropic 流式：监听 `message_delta` 事件中的 `usage.output_tokens` 以及 `message_start` 事件中的 `usage.input_tokens`：
-
-```javascript
-// 在流中累计
-let inputTokens = 0, outputTokens = 0;
-// 遇到 event: message_start → data.message.usage.input_tokens
-// 遇到 event: message_delta → data.usage.output_tokens
-const totalTokens = inputTokens + outputTokens;
-```
+Anthropic (流式):  
+你需要捕获并累计两个特定 Event (不是在最后阶段抛出)，在 `message_start` 事件里抓取 `input_tokens`，再在 `message_delta` 里累积 `output_tokens` 得到最终和。
 
 ### D. Google Gemini
-
 ```javascript
-const data = await res.json();
+// 非流式或最后流片段取得
 const totalTokens = data.usageMetadata.totalTokenCount;
-// 或分别：
-// data.usageMetadata.promptTokenCount
-// data.usageMetadata.candidatesTokenCount
 ```
-
-### 汇总
-
-| 提供商 | 非流式字段 | 流式获取方式 |
-|---|---|---|
-| OpenAI | `data.usage.total_tokens` | `stream_options.include_usage: true`，最后 chunk 的 `usage` |
-| Anthropic | `data.usage.input_tokens + output_tokens` | `message_start` + `message_delta` 事件 |
-| Google Gemini | `data.usageMetadata.totalTokenCount` | 最后 chunk 的 `usageMetadata` |
-
-> **建议：** 使用 `ctx.waitUntil(consumeQuota(...))` 异步上报，不阻塞流式响应的传输速度。

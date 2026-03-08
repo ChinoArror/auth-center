@@ -67,7 +67,7 @@ The Admin API is protected by Basic Auth. Use the `ADMIN_USERNAME` and `ADMIN_PA
 curl -X POST https://<your-worker-url>/admin/apps \
   -u admin:supersecretpassword \
   -H "Content-Type: application/json" \
-  -d '{"app_id": "english-assistant", "app_name": "English Assistant", "callback_url": "https://app.example.com/callback", "secret_key": "app-secret"}'
+  -d '{"app_id": "english-assistant", "app_name": "English Assistant", "callback_url": "https://app.example.com/callback", "secret_key": "app-secret", "use_agent_limit": true}'
 ```
 
 **List Apps:**
@@ -326,7 +326,9 @@ app.get('/api/secure-data', requireSSO, (req, res) => {
 
 The Auth Center now deeply integrates an **API Gateway / Quota Engine** architecture, allowing you to regulate Sub-App requests for premium APIs (e.g., LLM Tokens). 
 
-In the Admin Dashboard (`Permissions` tab), click the `Settings` (gear) icon to configure the following limits per user, per application:
+**To enable this feature, check "Enable Agent Limits" when creating the registered application (or toggle it later in the App Details page).** With this enabled, administrators get granular access to a line chart displaying real-time Token consumption grouped by day and user.
+
+In the Admin Dashboard (`Permissions` tab), click the `Settings` (gear) icon on an enabled app to configure the following limits per tracked user, per application:
 - **RPM (Requests Per Minute)**: Maximum queries per minute.
 - **RPD (Requests Per Day)**: Maximum queries per 24 hours.
 - **Tokens Per Day**: Maximum amount of permitted daily Token consumption.

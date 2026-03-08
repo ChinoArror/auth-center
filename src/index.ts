@@ -166,8 +166,12 @@ app.get('/api/quota/check', async (c) => {
 
   if (!uuid || !appId || !secret) return c.json({ error: 'Missing uuid, app_id or secret' }, 400);
 
-  const appRecord: any = await c.env.DB.prepare('SELECT secret_key FROM apps WHERE app_id = ?').bind(appId).first();
+  const appRecord: any = await c.env.DB.prepare('SELECT secret_key, use_agent_limit FROM apps WHERE app_id = ?').bind(appId).first();
   if (!appRecord || appRecord.secret_key !== secret) return c.json({ error: 'Unauthorized' }, 401);
+
+  if (!appRecord.use_agent_limit) {
+    return c.json({ valid: true, unlimited: true, remaining_tokens: null, remaining_requests: null });
+  }
 
   // Admin always has unlimited quota — skip all checks
   if (uuid === 'admin') {
@@ -218,10 +222,20 @@ app.post('/api/quota/consume', async (c) => {
 
   if (!uuid || !app_id || !secret) return c.json({ error: 'Missing fields' }, 400);
 
-  const appRecord: any = await c.env.DB.prepare('SELECT secret_key FROM apps WHERE app_id = ?').bind(app_id).first();
+  const appRecord: any = await c.env.DB.prepare('SELECT secret_key, use_agent_limit FROM apps WHERE app_id = ?').bind(app_id).first();
   if (!appRecord || appRecord.secret_key !== secret) return c.json({ error: 'Unauthorized' }, 401);
 
+  if (!appRecord.use_agent_limit) {
+    return c.json({ success: true });
+  }
+
   await c.env.DB.prepare('UPDATE user_apps SET used_tokens_today = used_tokens_today + ?, used_requests_today = used_requests_today + 1 WHERE uuid = ? AND app_id = ?').bind(tokens, uuid, app_id).run();
+
+  c.env.ANALYTICS.writeDataPoint({
+    blobs: [app_id, uuid, 'quota_consume', 'Unknown', 'Unknown', 'Unknown'],
+    doubles: [tokens],
+    indexes: [app_id]
+  });
 
   return c.json({ success: true });
 });
@@ -557,11 +571,11 @@ app.get('/admin/apps', async (c) => {
 });
 
 app.post('/admin/apps', async (c) => {
-  const { app_id, app_name, callback_url, secret_key } = await c.req.json();
+  const { app_id, app_name, callback_url, secret_key, use_agent_limit } = await c.req.json();
   try {
     await c.env.DB.prepare(
-      'INSERT INTO apps (app_id, app_name, callback_url, secret_key) VALUES (?, ?, ?, ?)'
-    ).bind(app_id, app_name, callback_url, secret_key).run();
+      'INSERT INTO apps (app_id, app_name, callback_url, secret_key, use_agent_limit) VALUES (?, ?, ?, ?, ?)'
+    ).bind(app_id, app_name, callback_url, secret_key, use_agent_limit ? 1 : 0).run();
     return c.json({ success: true });
   } catch (e: any) {
     return c.json({ error: e.message }, 400);
@@ -570,10 +584,10 @@ app.post('/admin/apps', async (c) => {
 
 app.put('/admin/apps/:app_id', async (c) => {
   const appId = c.req.param('app_id');
-  const { app_name, callback_url, secret_key } = await c.req.json();
+  const { app_name, callback_url, secret_key, use_agent_limit } = await c.req.json();
   await c.env.DB.prepare(
-    'UPDATE apps SET app_name = ?, callback_url = ?, secret_key = ? WHERE app_id = ?'
-  ).bind(app_name, callback_url, secret_key, appId).run();
+    'UPDATE apps SET app_name = ?, callback_url = ?, secret_key = ?, use_agent_limit = ? WHERE app_id = ?'
+  ).bind(app_name, callback_url, secret_key, use_agent_limit ? 1 : 0, appId).run();
   return c.json({ success: true });
 });
 

@@ -21,6 +21,7 @@ CREATE TABLE apps (
     app_name TEXT NOT NULL,
     callback_url TEXT NOT NULL,
     secret_key TEXT NOT NULL,
+    use_agent_limit INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
