@@ -68,34 +68,13 @@ export default function AppDetails() {
     const fetchStats = async () => {
         setLoadingStats(true);
         try {
-            const query = `
-        query getAnalytics($accountTag: String!, $appId: String!) {
-          viewer {
-            accounts(filter: {accountTag: $accountTag}) {
-              workersAnalyticsEngineAdaptiveGroups(
-                filter: { dataset: "auth-center", datetime_geq: "2024-01-01T00:00:00Z", blob1: $appId, blob3: "quota_consume" },
-                limit: 10000,
-                orderBy: [datetime_ASC]
-              ) {
-                sum {
-                  double1
-                }
-                dimensions {
-                  blob2
-                  datetime
-                }
-              }
-            }
-          }
-        }
-      `;
-            const res = await authFetch('/admin/stats/graphql', {
-                method: 'POST',
-                body: JSON.stringify({ query, variables: { appId } })
-            });
+            const res = await authFetch(`/admin/stats/quota?app_id=${encodeURIComponent(appId || '')}`);
             if (res.ok) {
                 const data = await res.json();
                 setStatsData(data);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                console.error('Failed to fetch quota stats:', err);
             }
         } catch (e) {
             console.error(e);
@@ -139,39 +118,27 @@ export default function AppDetails() {
 
     const chartData = useMemo(() => {
         if (!statsData) return { data: [], userIds: [] };
-        const events = statsData?.data?.viewer?.accounts?.[0]?.workersAnalyticsEngineAdaptiveGroups || [];
+        // SQL API returns: { data: [ {day: "2024-03-01", uuid: "...", total_tokens: 123} ] }
+        const rows: { day: string; uuid: string; total_tokens: number }[] = statsData?.data || [];
 
-        // Group by Date (UTC+8)
+        // Group by Day (day from SQL is already YYYY-MM-DD in UTC; shift to UTC+8 means
+        // events before 00:00 UTC will appear on the previous day in UTC+8. For simplicity
+        // we use the day as returned since it already reflects per-day aggregation.)
         const grouped: Record<string, Record<string, any>> = {};
         const uids = new Set<string>();
 
-        events.forEach((ev: any) => {
-            const dtStr = ev.dimensions?.datetime;
-            if (!dtStr) return;
-            const uuid = ev.dimensions.blob2 || 'unknown';
+        rows.forEach((row) => {
+            const uuid = row.uuid || 'unknown';
             if (selectedUser !== 'all' && uuid !== selectedUser) return;
 
             uids.add(uuid);
-
-            // Convert to UTC+8
-            const dateObj = new Date(dtStr);
-            const utcPlus8 = new Date(dateObj.getTime() + 8 * 3600 * 1000);
-            const y = utcPlus8.getUTCFullYear();
-            const m = String(utcPlus8.getUTCMonth() + 1).padStart(2, '0');
-            const d = String(utcPlus8.getUTCDate()).padStart(2, '0');
-            const dateKey = `${y}-${m}-${d}`;
-
-            const sum = ev.sum?.double1 || 0;
+            const dateKey = row.day; // "YYYY-MM-DD"
 
             if (!grouped[dateKey]) grouped[dateKey] = { date: dateKey };
-            grouped[dateKey][uuid] = (grouped[dateKey][uuid] || 0) + sum;
-            grouped[dateKey]['all'] = (grouped[dateKey]['all'] || 0) + sum; // implicit sum
+            grouped[dateKey][uuid] = (grouped[dateKey][uuid] || 0) + (row.total_tokens || 0);
         });
 
         const arr = Object.values(grouped).sort((a, b) => (a.date as string).localeCompare(b.date as string));
-
-        // If we have selected a user, line key acts upon that, else lines for each user?
-        // "按日按用户绘成折线图" -> if 'all', draw multiline for each user. if specific user, draw one line.
 
         return { data: arr, userIds: Array.from(uids) };
     }, [statsData, selectedUser]);

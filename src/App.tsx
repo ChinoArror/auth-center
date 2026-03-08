@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github, Zap, Globe, Database, Code2, Box, Layers, Cpu, Rocket, Star, Sparkles, Bot, Wifi, Lock, Palette } from 'lucide-react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, Legend } from 'recharts';
 import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
 import SsoBinding from './SsoBinding';
@@ -206,33 +207,7 @@ function Dashboard() {
   const fetchStats = async () => {
     setLoadingStats(true);
     try {
-      const query = `
-        query getAnalytics($accountTag: String!) {
-          viewer {
-            accounts(filter: {accountTag: $accountTag}) {
-              workersAnalyticsEngineAdaptiveGroups(
-                filter: { dataset: "auth-center", datetime_geq: "2024-01-01T00:00:00Z" },
-                limit: 1000
-              ) {
-                sum {
-                  double1
-                }
-                count
-                dimensions {
-                  blob1
-                  blob3
-                  blob5
-                  blob6
-                }
-              }
-            }
-          }
-        }
-      `;
-      const res = await authFetch('/admin/stats/graphql', {
-        method: 'POST',
-        body: JSON.stringify({ query })
-      });
+      const res = await authFetch('/admin/stats/usage');
       if (res.ok) {
         const data = await res.json();
         setStatsData(data);
@@ -777,55 +752,219 @@ function Dashboard() {
             )}
 
             {activeTab === 'statistics' && (() => {
-              const events = statsData?.data?.viewer?.accounts?.[0]?.workersAnalyticsEngineAdaptiveGroups || [];
-              const totalDuration = events.reduce((acc: number, curr: any) => acc + (curr.sum?.double1 || 0), 0);
-              const totalEvents = events.reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
-              const browsers = events.reduce((acc: any, curr: any) => {
-                const b = curr.dimensions?.blob6 || 'Unknown';
-                acc[b] = (acc[b] || 0) + curr.count;
-                return acc;
-              }, {});
-              const topBrowser = Object.entries<{ [key: string]: number }>(browsers).sort((a: any, b: any) => b[1] - a[1])[0]?.[0] || 'N/A';
+              const data = statsData?.data || [];
+
+              // 1. KPI Aggregations
+              const totalEvents = data.reduce((acc: number, c: any) => acc + (c.events || 0), 0);
+              const uniqueUsers = new Set(data.map((c: any) => c.uuid)).size;
+              const totalValue = data.reduce((acc: number, c: any) => acc + (c.total_value || 0), 0);
+
+              const getTop = (key: string) => {
+                const map: any = {};
+                data.forEach((c: any) => {
+                  const val = c[key] || 'Unknown';
+                  map[val] = (map[val] || 0) + (c.events || 0);
+                });
+                return Object.entries(map).sort((a: any, b: any) => b[1] - a[1])[0]?.[0] || 'N/A';
+              };
+
+              const topAppId = getTop('app_id');
+              const topApp = apps.find(a => a.app_id === topAppId)?.display_name || topAppId;
+              const topBrowser = getTop('browser');
+              const topCountry = getTop('country');
+
+              // 2. Daily Trends for AreaChart
+              const dailyMap: any = {};
+              data.forEach((c: any) => {
+                const day = c.day || 'N/A';
+                if (!dailyMap[day]) dailyMap[day] = { day, visits: 0, users: new Set() };
+                dailyMap[day].visits += c.events;
+                dailyMap[day].users.add(c.uuid);
+              });
+              const dailyData = Object.values(dailyMap).map((d: any) => ({
+                day: d.day,
+                visits: d.visits,
+                users: d.users.size
+              })).sort((a: any, b: any) => a.day.localeCompare(b.day));
+
+              // 3. Category Data for Pie/Bar Charts
+              const getBreakdown = (key: string, limit = 5) => {
+                const map: any = {};
+                data.forEach((c: any) => {
+                  const val = c[key] || 'Unknown';
+                  map[val] = (map[val] || 0) + (c.events || 0);
+                });
+                return Object.entries(map)
+                  .map(([name, value]) => ({ name, value }))
+                  .sort((a, b: any) => (b.value as number) - (a.value as number))
+                  .slice(0, limit);
+              };
+
+              const browsersData = getBreakdown('browser');
+              const countriesData = getBreakdown('country');
+              const devicesData = getBreakdown('device');
+              const appsData = getBreakdown('app_id').map(item => ({
+                ...item,
+                name: apps.find(a => a.app_id === item.name)?.display_name || item.name
+              }));
+
+              const COLORS = ['#A855F7', '#3B82F6', '#10B981', '#F59E0B', '#EF4444'];
 
               return (
-                <div>
-                  <header className="mb-8 bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-md">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <h1 className="text-3xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-emerald-400">System Statistics</h1>
-                        <p className="text-purple-200/60">Usage duration, time distribution, and device metrics via Analytics Engine.</p>
-                      </div>
-                      <motion.button onClick={fetchStats} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="p-3 bg-purple-500/20 rounded-xl text-purple-300 hover:bg-purple-500/40 transition-colors">
-                        <Activity className={`w-5 h-5 ${loadingStats ? 'animate-spin' : ''}`} />
-                      </motion.button>
+                <div className="space-y-8 pb-12">
+                  <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/5 p-8 rounded-[2.5rem] border border-white/10 backdrop-blur-xl mb-4 relative overflow-hidden group">
+                    <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 to-blue-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
+                    <div className="relative">
+                      <h1 className="text-4xl font-bold text-white tracking-tight mb-2 flex items-center gap-3">
+                        <BarChart3 className="text-purple-400 w-8 h-8" />
+                        System Analytics
+                      </h1>
+                      <p className="text-white/50 text-lg">Real-time health and usage overview of your Auth ecosystem.</p>
+                    </div>
+                    <div className="flex items-center gap-3 relative">
+                      <button onClick={fetchStats} className={`p-4 rounded-2xl border border-white/10 bg-white/5 text-white/70 hover:bg-white/10 transition-all hover:scale-105 active:scale-95 ${loadingStats ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        <Activity className={`w-6 h-6 ${loadingStats ? 'animate-spin' : ''}`} />
+                      </button>
                     </div>
                   </header>
 
-                  <div className="grid md:grid-cols-3 gap-6 mb-8">
-                    <div className="bg-white/5 border border-white/10 p-6 rounded-3xl hover:bg-white/10 transition-colors">
-                      <div className="flex gap-4 items-center mb-2"><Clock className="text-purple-400 w-6 h-6" /> <h3 className="font-semibold text-lg">Total Duration</h3></div>
-                      <p className="text-3xl font-bold text-white mb-1">{loadingStats ? '...' : `${Math.round(totalDuration)}s`}</p>
-                      <p className="text-sm text-purple-300/50">Combined across all apps</p>
+                  {/* KPI Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {[
+                      { label: 'Total Visits', value: totalEvents, sub: 'Total pings processed', icon: Activity, color: 'blue' },
+                      { label: 'Unique Visitors', value: uniqueUsers, sub: 'Distinct user IDs', icon: Users, color: 'purple' },
+                      { label: 'Top Browser', value: topBrowser, sub: 'Preferred environment', icon: Globe, color: 'emerald' },
+                      { label: 'Hot Application', value: topApp, sub: 'Most active integration', icon: Zap, color: 'amber' },
+                    ].map((kpi, idx) => (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.1 }}
+                        key={kpi.label} className="bg-white/5 border border-white/10 p-6 rounded-[2rem] hover:bg-white/10 transition-all cursor-default group"
+                      >
+                        <div className={`p-3 rounded-2xl bg-${kpi.color}-500/10 text-${kpi.color}-400 w-fit mb-4 group-hover:scale-110 transition-transform`}>
+                          <kpi.icon className="w-6 h-6" />
+                        </div>
+                        <p className="text-white/40 text-sm font-medium mb-1">{kpi.label}</p>
+                        <p className="text-3xl font-bold text-white mb-1 truncate">{loadingStats ? '...' : kpi.value}</p>
+                        <p className="text-xs text-white/20">{kpi.sub}</p>
+                      </motion.div>
+                    ))}
+                  </div>
+
+                  {/* Trends Chart */}
+                  <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 backdrop-blur-sm">
+                    <div className="flex items-center justify-between mb-8">
+                      <h3 className="text-xl font-bold text-white flex items-center gap-2"><Clock className="text-purple-400 w-5 h-5" /> Traffic Distribution</h3>
+                      <div className="flex gap-4 text-xs">
+                        <span className="flex items-center gap-1.5 text-purple-400"><div className="w-2 h-2 rounded-full bg-purple-500"></div> Visits</span>
+                        <span className="flex items-center gap-1.5 text-blue-400"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Unique Users</span>
+                      </div>
                     </div>
-                    <div className="bg-white/5 border border-white/10 p-6 rounded-3xl hover:bg-white/10 transition-colors">
-                      <div className="flex gap-4 items-center mb-2"><Activity className="text-blue-400 w-6 h-6" /> <h3 className="font-semibold text-lg">Logged Events</h3></div>
-                      <p className="text-3xl font-bold text-white mb-1">{loadingStats ? '...' : totalEvents}</p>
-                      <p className="text-sm text-blue-300/50">Total tracking pings received</p>
-                    </div>
-                    <div className="bg-white/5 border border-white/10 p-6 rounded-3xl hover:bg-white/10 transition-colors">
-                      <div className="flex gap-4 items-center mb-2"><PieChart className="text-emerald-400 w-6 h-6" /> <h3 className="font-semibold text-lg">Top Browser</h3></div>
-                      <p className="text-3xl font-bold text-white mb-1">{loadingStats ? '...' : topBrowser}</p>
-                      <p className="text-sm text-emerald-300/50">Most used by clients</p>
+                    <div className="h-[400px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={dailyData}>
+                          <defs>
+                            <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#A855F7" stopOpacity={0.3} /><stop offset="95%" stopColor="#A855F7" stopOpacity={0} /></linearGradient>
+                            <linearGradient id="colorUsers" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                          <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 12 }} dy={10} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 12 }} />
+                          <RechartsTooltip
+                            contentStyle={{ backgroundColor: '#0F172A', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', color: '#fff' }}
+                            itemStyle={{ color: '#fff' }}
+                          />
+                          <Area type="monotone" dataKey="visits" stroke="#A855F7" fillOpacity={1} fill="url(#colorVisits)" strokeWidth={3} />
+                          <Area type="monotone" dataKey="users" stroke="#3B82F6" fillOpacity={1} fill="url(#colorUsers)" strokeWidth={3} />
+                        </AreaChart>
+                      </ResponsiveContainer>
                     </div>
                   </div>
 
-                  <div className="bg-gradient-to-br from-black/60 to-purple-900/30 border border-purple-500/20 p-8 rounded-3xl shadow-2xl relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><BarChart3 className="w-48 h-48" /></div>
-                    <h2 className="text-xl font-bold mb-4 text-purple-300 flex items-center gap-3">Raw Analytics Data Feed</h2>
-                    <div className="max-h-64 overflow-y-auto w-full bg-black/40 p-4 rounded-xl border border-white/5 font-mono text-sm text-white/70">
-                      <pre>{JSON.stringify(events, null, 2)}</pre>
+                  {/* Breakdowns */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    {/* Top Apps */}
+                    <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8">
+                      <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2"><Zap className="text-amber-400 w-5 h-5" /> Activity by Application</h3>
+                      <div className="space-y-4">
+                        {appsData.map((app: any, i) => (
+                          <div key={app.name} className="flex items-center gap-4 group">
+                            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-white/40 font-bold border border-white/5 group-hover:border-purple-500/50 transition-colors">{i + 1}</div>
+                            <div className="flex-1">
+                              <div className="flex justify-between items-end mb-2">
+                                <span className="text-white font-medium">{app.name}</span>
+                                <span className="text-white/40 text-sm">{app.value} events</span>
+                              </div>
+                              <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                                <motion.div
+                                  initial={{ width: 0 }} animate={{ width: `${(app.value / totalEvents) * 100}%` }}
+                                  className="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Geo / Browser Mix */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center">
+                        <h3 className="text-lg font-bold text-white mb-6 self-start flex items-center gap-2"><Globe className="text-emerald-400 w-4 h-4" /> Countries</h3>
+                        <div className="h-48 w-full">
+                          <ResponsiveContainer>
+                            <RePieChart>
+                              <Pie data={countriesData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                                {countriesData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none" />
+                                ))}
+                              </Pie>
+                              <RechartsTooltip />
+                            </RePieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="mt-4 w-full space-y-2">
+                          {countriesData.map((c, i) => (
+                            <div key={c.name} className="flex justify-between text-xs items-center text-white/70">
+                              <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></div> {c.name}</span>
+                              <span className="text-white/30 font-mono">{Math.round((c.value / totalEvents) * 100)}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center">
+                        <h3 className="text-lg font-bold text-white mb-6 self-start flex items-center gap-2"><PieChart className="text-blue-400 w-4 h-4" /> Browsers</h3>
+                        <div className="h-48 w-full">
+                          <ResponsiveContainer>
+                            <RePieChart>
+                              <Pie data={browsersData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                                {browsersData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none" />
+                                ))}
+                              </Pie>
+                              <RechartsTooltip />
+                            </RePieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="mt-4 w-full space-y-2">
+                          {browsersData.map((b, i) => (
+                            <div key={b.name} className="flex justify-between text-xs items-center text-white/70">
+                              <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></div> {b.name}</span>
+                              <span className="text-white/30 font-mono">{Math.round((b.value / totalEvents) * 100)}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  {/* JSON Footer for debugging */}
+                  <details className="mt-12 text-white/10 text-xs">
+                    <summary className="cursor-pointer hover:text-white/30 transition-colors">Raw Analytics Payload</summary>
+                    <pre className="p-4 bg-black/40 rounded-3xl border border-white/5 mt-4 overflow-auto max-h-64">
+                      {JSON.stringify(data, null, 2)}
+                    </pre>
+                  </details>
                 </div>
               )
             })()}

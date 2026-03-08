@@ -1,6 +1,12 @@
-# SSO & 数据分析中心 (Cloudflare Workers)
+# SSO & Analytics System (Cloudflare Workers)
 
-这是一个基于 Cloudflare Workers、D1 以及 Workers Analytics Engine 构建的单点登录 (SSO) 与鉴权数据分析统一中心。它能为你的多个 Web 应用提供中心化的认证与数据埋点记录。
+这是一个基于 Cloudflare Workers 构建的统一单点登录 (SSO) 和分析系统。它为多个 Web 应用提供集中的身份验证和使用情况跟踪。
+
+- **灵活集成**：支持简单重定向或标准 SSO 流程，轻松上手。
+- **Agent 用量限制**：（新增！）为基于大模型的 Agent 配置 Token 和请求限额。
+- **可视化数据分析**：（新增！）集成 Cloudflare Analytics Engine SQL API，提供实时流量、浏览器、地理位置分布的精美仪表盘。
+- **安全至上**：100% 构建在 Cloudflare 技术栈之上（D1 数据库，Workers 逻辑层）。
+- **GitHub SSO 集成**：支持绑定 GitHub 身份，实现一键安全登录。
 
 ## 必备条件
 

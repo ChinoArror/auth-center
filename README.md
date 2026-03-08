@@ -1,6 +1,12 @@
-# SSO & Analytics System (Cloudflare Workers)1
+# SSO & Analytics System (Cloudflare Workers)
 
-This is a unified Single Sign-On (SSO) and Analytics system built on Cloudflare Workers, D1, and Workers Analytics Engine. It provides centralized authentication and usage tracking for multiple web applications.
+This is a unified Single Sign-On (SSO) and Analytics system built on Cloudflare Workers. It provides centralized authentication and usage tracking for multiple web applications.
+
+- **Flexible Integration**: Simple redirection or standard SSO flows with ease.
+- **Agent Usage Limits**: (New!) Configure token and request quotas for LLM-based agents.
+- **Visual Analytics Dashboard**: (New!) Premium dashboard with real-time charts (Visits, Browsers, GEO) using Cloudflare Analytics Engine SQL API.
+- **Security First**: 100% on Cloudflare Stack (D1 for database, Workers for logic).
+- **GitHub SSO Integration**: Bind GitHub identities for one-click secure access.
 
 ## Prerequisites
 

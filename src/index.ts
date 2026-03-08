@@ -640,7 +640,6 @@ app.post('/admin/stats/graphql', async (c) => {
     headers: {
       'Authorization': `Bearer ${c.env.CF_API_TOKEN}`,
       'Content-Type': 'application/json',
-      'X-Auth-Email': '' // Not strictly needed for CF_API_TOKEN but sometimes helpful if required, usually api token is enough.
     },
     body: JSON.stringify({ query, variables: { accountTag: c.env.CF_ACCOUNT_ID, ...variables } })
   });
@@ -651,6 +650,85 @@ app.post('/admin/stats/graphql', async (c) => {
   }
 
   const data = await response.json();
+  return c.json(data);
+});
+
+// Analytics Engine SQL API proxy — used to query quota consumption with blob/double fields
+// The Cloudflare GraphQL API does NOT expose blob1/blob2/double1 for custom datasets.
+// The SQL API is the correct way to query custom Analytics Engine data.
+app.get('/admin/stats/quota', async (c) => {
+  const appId = c.req.query('app_id');
+  if (!appId) return c.json({ error: 'Missing app_id' }, 400);
+
+  // Build SQL query: group by date (day) and blob2 (user uuid)
+  // blob1 = app_id, blob2 = uuid, blob3 = event type, double1 = tokens
+  const sql = `
+    SELECT
+      toDate(timestamp) AS day,
+      blob2             AS uuid,
+      SUM(double1)      AS total_tokens
+    FROM "auth-center"
+    WHERE blob1 = '${appId.replace(/'/g, "''")}'
+      AND blob3 = 'quota_consume'
+      AND timestamp >= now() - INTERVAL '90' DAY
+    GROUP BY day, uuid
+    ORDER BY day ASC
+  `;
+
+  const url = `https://api.cloudflare.com/client/v4/accounts/${c.env.CF_ACCOUNT_ID}/analytics_engine/sql`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${c.env.CF_API_TOKEN}`,
+      'Content-Type': 'text/plain',
+    },
+    body: sql
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    return c.json({ error: 'Analytics SQL Error', details: text }, response.status as any);
+  }
+
+  const data: any = await response.json();
+  return c.json(data);
+});
+
+// Analytics Engine SQL API proxy — used to query generic system tracking (App.tsx stats)
+app.get('/admin/stats/usage', async (c) => {
+  const sql = `
+    SELECT
+      toDate(timestamp) AS day,
+      blob1 AS app_id,
+      blob2 AS uuid,
+      blob4 AS country,
+      blob5 AS device,
+      blob6 AS browser,
+      SUM(double1) AS total_value,
+      COUNT() AS events
+    FROM "auth-center"
+    WHERE timestamp >= now() - INTERVAL '30' DAY
+    GROUP BY day, app_id, uuid, country, device, browser
+    LIMIT 10000
+  `;
+
+  const url = `https://api.cloudflare.com/client/v4/accounts/${c.env.CF_ACCOUNT_ID}/analytics_engine/sql`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${c.env.CF_API_TOKEN}`,
+      'Content-Type': 'text/plain',
+    },
+    body: sql
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    return c.json({ error: 'Analytics SQL Error', details: text }, response.status as any);
+  }
+
+  const data: any = await response.json();
   return c.json(data);
 });
 
