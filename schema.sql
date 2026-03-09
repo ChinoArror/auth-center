@@ -42,3 +42,14 @@ CREATE TABLE user_apps (
 
 CREATE INDEX idx_users_uuid ON users(uuid);
 CREATE INDEX idx_users_username ON users(username);
+
+CREATE TABLE passkeys (
+    id TEXT PRIMARY KEY,
+    uuid TEXT NOT NULL,
+    credential_id TEXT UNIQUE NOT NULL,
+    public_key TEXT NOT NULL,
+    counter INTEGER NOT NULL,
+    name TEXT DEFAULT 'My Passkey',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_passkeys_uuid ON passkeys(uuid);

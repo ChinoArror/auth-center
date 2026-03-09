@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Shield, Copy, Check, Eye, EyeOff, ArrowLeft, Github } from 'lucide-react';
+import { Shield, Copy, Check, Eye, EyeOff, ArrowLeft, Github, KeyRound } from 'lucide-react';
 import { useParams, Navigate, Link } from 'react-router-dom';
 
 const API_BASE = '';
@@ -21,6 +21,7 @@ export default function UserProfile({ usernameOverride }: { usernameOverride?: s
     const [showPlainPassword, setShowPlainPassword] = useState(false);
     const [copied, setCopied] = useState(false);
     const [copiedGithub, setCopiedGithub] = useState(false);
+    const [copiedPasskey, setCopiedPasskey] = useState(false);
 
     React.useEffect(() => {
         if (isLogged) {
@@ -228,23 +229,45 @@ export default function UserProfile({ usernameOverride }: { usernameOverride?: s
                 </div>
 
                 {/* SSO Integrations */}
-                <div className="mt-6 bg-white/5 border border-white/10 p-6 rounded-3xl space-y-4">
-                    <h3 className="font-semibold text-base mb-4 text-white/80 flex items-center gap-2"><Github className="w-5 h-5" /> GitHub SSO Binding</h3>
-                    <p className="text-sm text-white/60">
-                        Allow this user to log in using their GitHub account. Send them the binding link.
-                    </p>
-                    <div className="pt-2 md:w-1/2">
-                        <motion.button type="button" onClick={() => {
-                            const link = `${window.location.origin}/${user?.uuid}/sso-binding`;
-                            navigator.clipboard.writeText(link);
-                            setCopiedGithub(true);
-                            setTimeout(() => setCopiedGithub(false), 2000);
-                        }}
-                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                            className="w-full flex items-center justify-center gap-2 bg-[#171515] hover:bg-[#201e1e] text-white font-semibold py-3 rounded-xl shadow-lg transition-all text-sm border border-white/10">
-                            {copiedGithub ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                            {copiedGithub ? 'Copied Bind Link!' : 'Copy GitHub Bind Link'}
-                        </motion.button>
+                <div className="mt-6 bg-white/5 border border-white/10 p-6 rounded-3xl space-y-6">
+                    <div>
+                        <h3 className="font-semibold text-base mb-2 text-white/80 flex items-center gap-2"><Github className="w-5 h-5" /> GitHub SSO Binding</h3>
+                        <p className="text-sm text-white/60 mb-4">
+                            Allow this user to log in using their GitHub account. Send them the binding link.
+                        </p>
+                        <div className="md:w-1/2">
+                            <motion.button type="button" onClick={() => {
+                                const link = `${window.location.origin}/${user?.uuid}/sso-binding`;
+                                navigator.clipboard.writeText(link);
+                                setCopiedGithub(true);
+                                setTimeout(() => setCopiedGithub(false), 2000);
+                            }}
+                                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                                className="w-full flex items-center justify-center gap-2 bg-[#171515] hover:bg-[#201e1e] text-white font-semibold py-3 rounded-xl shadow-lg transition-all text-sm border border-white/10">
+                                {copiedGithub ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                {copiedGithub ? 'Copied Bind Link!' : 'Copy GitHub Bind Link'}
+                            </motion.button>
+                        </div>
+                    </div>
+
+                    <div className="border-t border-white/10 pt-6">
+                        <h3 className="font-semibold text-base mb-2 text-white/80 flex items-center gap-2"><KeyRound className="w-5 h-5 text-indigo-400" /> Passkey (WebAuthn) Management</h3>
+                        <p className="text-sm text-white/60 mb-4">
+                            Allow this user to set up Passkeys for passwordless secure login.
+                        </p>
+                        <div className="md:w-1/2">
+                            <motion.button type="button" onClick={() => {
+                                const link = `${window.location.origin}/${user?.uuid}/passkey`;
+                                navigator.clipboard.writeText(link);
+                                setCopiedPasskey(true);
+                                setTimeout(() => setCopiedPasskey(false), 2000);
+                            }}
+                                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                                className="w-full flex items-center justify-center gap-2 bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 hover:text-white font-semibold py-3 rounded-xl shadow-lg transition-all text-sm border border-indigo-500/30">
+                                {copiedPasskey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                {copiedPasskey ? 'Copied Passkey Link!' : 'Copy Passkey Manage Link'}
+                            </motion.button>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -7,6 +7,8 @@ import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
 import SsoBinding from './SsoBinding';
 import AppDetails from './AppDetails';
+import PasskeyManage from './PasskeyManage';
+import { startAuthentication } from '@simplewebauthn/browser';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
@@ -161,6 +163,36 @@ function Dashboard() {
       }
     } catch (err: any) {
       setSsoError(err.message);
+    }
+  };
+
+  const handlePasskeyLogin = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    setSsoError('');
+    try {
+      const resp = await fetch(`${API_BASE}/api/passkey/generate-authentication-options`);
+      const options = await resp.json();
+      if (!resp.ok) throw new Error(options.error || 'Failed to get options');
+
+      const attResp = await startAuthentication({ optionsJSON: options });
+
+      const verifyResp = await fetch(`${API_BASE}/api/passkey/verify-authentication?app_id=${ssoAppId}&app_redirect=${encodeURIComponent(ssoRedirect)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(attResp)
+      });
+      const data = await verifyResp.json();
+      if (verifyResp.ok && data.verified) {
+        // Automatically redirect via token in JSON similar to GitHub login but client-side redirect
+        if (data.token) {
+          window.location.href = `${ssoRedirect}${ssoRedirect.includes('?') ? '&' : '?'}token=${data.token}`;
+        }
+      } else {
+        throw new Error(data.error || 'Login failed');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setSsoError(err.message || err.toString() || 'Passkey verification failed');
     }
   };
 
@@ -382,6 +414,16 @@ function Dashboard() {
                 <Github className="w-6 h-6" />
                 Continue with Github
               </motion.a>
+              <motion.button
+                type="button"
+                onClick={handlePasskeyLogin}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="w-full flex items-center justify-center gap-3 bg-[#0f172a] hover:bg-[#1e293b] text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg transition-all border border-indigo-500/30"
+              >
+                <KeyRound className="w-6 h-6 text-indigo-400" />
+                Continue with Passkey
+              </motion.button>
             </form>
           )}
         </motion.div>
@@ -457,6 +499,13 @@ function Dashboard() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <Link
+                to={`/admin/passkey`}
+                className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
+                title="Manage Passkeys for Admin"
+              >
+                <KeyRound className="w-5 h-5 text-indigo-400" />
+              </Link>
               <motion.a
                 href={`${API_BASE}/api/github/login?admin_bind=admin`}
                 target="_blank" rel="noreferrer"
@@ -1042,6 +1091,7 @@ export default function App() {
     <Routes>
       <Route path="/:uuid/change-password" element={<ChangePassword />} />
       <Route path="/:uuid/sso-binding" element={<SsoBinding />} />
+      <Route path="/:uuid/passkey" element={<PasskeyManage />} />
       <Route path="/app/:appId" element={<AppDetails />} />
       <Route path="/*" element={<Dashboard />} />
     </Routes>

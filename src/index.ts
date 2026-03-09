@@ -3,6 +3,7 @@ import { basicAuth } from 'hono/basic-auth';
 import { cors } from 'hono/cors';
 import { hashPassword, generateSalt, verifyPassword, generateJWT, verifyJWT } from './auth';
 import { getCookie, setCookie } from 'hono/cookie';
+import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 
 type Bindings = {
   DB: D1Database;
@@ -295,6 +296,16 @@ app.post('/api/users/:uuid/change-password', async (c) => {
 app.post('/api/users/:uuid/verify-password', async (c) => {
   const uuid = c.req.param('uuid');
   const { password } = await c.req.json();
+
+  if (uuid === 'admin') {
+    if (password === c.env.ADMIN_PASSWORD) {
+      const token = await generateJWT({ action: 'bind', uuid }, c.env.JWT_SECRET, 1 / 24);
+      return c.json({ success: true, bind_token: token });
+    } else {
+      return c.json({ error: 'Incorrect password' }, 401);
+    }
+  }
+
   const user: any = await c.env.DB.prepare('SELECT password_hash, password_salt FROM users WHERE uuid = ?').bind(uuid).first();
   if (!user) return c.json({ error: 'User not found' }, 404);
 
@@ -476,6 +487,245 @@ app.get('/api/github/callback', async (c) => {
   return c.text('Unknown action', 400);
 });
 
+// --- Passkeys API (WebAuthn) ---
+
+const rpName = 'Auth Center SSO';
+
+app.post('/api/passkey/generate-registration-options', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return c.json({ error: 'Missing token' }, 401);
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind') return c.json({ error: 'Invalid token action' }, 403);
+    const uuid = payload.uuid;
+
+    const { results } = await c.env.DB.prepare('SELECT credential_id FROM passkeys WHERE uuid = ?').bind(uuid).all();
+    const existingCredentials = results.map((row: any) => ({
+      id: row.credential_id,
+      type: 'public-key' as const,
+      transports: ['internal', 'usb', 'ble', 'nfc'] as any[],
+    }));
+
+    let username = uuid;
+    if (uuid !== 'admin') {
+      const user: any = await c.env.DB.prepare('SELECT username FROM users WHERE uuid = ?').bind(uuid).first();
+      if (user) username = user.username;
+    }
+
+    const rpID = new URL(c.req.url).hostname;
+    const options = await generateRegistrationOptions({
+      rpName,
+      rpID,
+      userID: new TextEncoder().encode(uuid),
+      userName: username,
+      attestationType: 'none',
+      excludeCredentials: existingCredentials,
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'preferred',
+      },
+    });
+
+    const challengeToken = await generateJWT({ challenge: options.challenge, uuid }, c.env.JWT_SECRET, 1 / 24);
+    setCookie(c, 'passkey_reg_challenge', challengeToken, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
+
+    return c.json(options);
+  } catch (e) {
+    return c.json({ error: 'Authentication failed' }, 401);
+  }
+});
+
+app.post('/api/passkey/verify-registration', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return c.json({ error: 'Missing token' }, 401);
+  const bindToken = authHeader.split(' ')[1];
+  const challengeToken = getCookie(c, 'passkey_reg_challenge');
+  if (!challengeToken) return c.json({ error: 'Missing challenge' }, 400);
+
+  try {
+    const payload = await verifyJWT(bindToken, c.env.JWT_SECRET);
+    if (payload.action !== 'bind') return c.json({ error: 'Invalid token action' }, 403);
+    const uuid = payload.uuid;
+
+    const challengePayload = await verifyJWT(challengeToken, c.env.JWT_SECRET);
+    if (challengePayload.uuid !== uuid) return c.json({ error: 'Challenge mismatch' }, 400);
+
+    const body = await c.req.json();
+    const rpID = new URL(c.req.url).hostname;
+    const origin = new URL(c.req.url).origin;
+
+    const verification = await verifyRegistrationResponse({
+      response: body,
+      expectedChallenge: challengePayload.challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      requireUserVerification: false,
+    });
+
+    if (verification.verified && verification.registrationInfo) {
+      const { credential } = verification.registrationInfo;
+      const passkeyId = crypto.randomUUID();
+      // Encoding to base64url equivalent string handling via buffer/uint8array is generally done internally
+      // But we will turn them to pure strings. Uint8Array.
+      // Or just use Buffer.from(credentialID).toString('base64url') - this requires base64url helper
+      const b64CredentialId = body.id; // Already base64url encoded credential id natively by client
+      const b64PublicKey = isoBase64URL.fromBuffer(credential.publicKey);
+
+      await c.env.DB.prepare(
+        'INSERT INTO passkeys (id, uuid, credential_id, public_key, counter) VALUES (?, ?, ?, ?, ?)'
+      ).bind(passkeyId, uuid, b64CredentialId, b64PublicKey, credential.counter).run();
+
+      setCookie(c, 'passkey_reg_challenge', '', { maxAge: 0, path: '/' });
+      return c.json({ verified: true });
+    }
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Verification failed' }, 400);
+  }
+  return c.json({ error: 'Failed' }, 400);
+});
+
+app.get('/api/passkey/:uuid/list', async (c) => {
+  const uuid = c.req.param('uuid');
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return c.json({ error: 'Missing token' }, 401);
+  const token = authHeader.split(' ')[1];
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== uuid) return c.json({ error: 'Unauthorized' }, 403);
+    const { results } = await c.env.DB.prepare('SELECT id, name, created_at FROM passkeys WHERE uuid = ?').bind(uuid).all();
+    return c.json(results);
+  } catch (e) { return c.json({ error: 'Invalid token' }, 401); }
+});
+
+app.put('/api/passkey/:uuid/:id', async (c) => {
+  const uuid = c.req.param('uuid');
+  const pid = c.req.param('id');
+  const { name } = await c.req.json();
+  const authHeader = c.req.header('Authorization');
+  const token = authHeader?.split(' ')[1] || '';
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== uuid) return c.json({ error: 'Unauthorized' }, 403);
+    await c.env.DB.prepare('UPDATE passkeys SET name = ? WHERE id = ? AND uuid = ?').bind(name, pid, uuid).run();
+    return c.json({ success: true });
+  } catch (e) { return c.json({ error: 'Unauthorized' }, 401); }
+});
+
+app.delete('/api/passkey/:uuid/:id', async (c) => {
+  const uuid = c.req.param('uuid');
+  const pid = c.req.param('id');
+  const authHeader = c.req.header('Authorization');
+  const token = authHeader?.split(' ')[1] || '';
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== uuid) return c.json({ error: 'Unauthorized' }, 403);
+    await c.env.DB.prepare('DELETE FROM passkeys WHERE id = ? AND uuid = ?').bind(pid, uuid).run();
+    return c.json({ success: true });
+  } catch (e) { return c.json({ error: 'Unauthorized' }, 401); }
+});
+
+app.get('/api/passkey/generate-authentication-options', async (c) => {
+  const rpID = new URL(c.req.url).hostname;
+  const options = await generateAuthenticationOptions({
+    rpID,
+    userVerification: 'preferred',
+  });
+  const challengeToken = await generateJWT({ challenge: options.challenge }, c.env.JWT_SECRET, 1 / 24);
+  setCookie(c, 'passkey_login_challenge', challengeToken, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
+  return c.json(options);
+});
+
+import { isoBase64URL } from '@simplewebauthn/server/helpers';
+
+app.post('/api/passkey/verify-authentication', async (c) => {
+  const challengeToken = getCookie(c, 'passkey_login_challenge');
+  if (!challengeToken) return c.json({ error: 'Missing challenge' }, 400);
+
+  const appId = c.req.query('app_id');
+  const appRedirect = c.req.query('app_redirect');
+
+  try {
+    const challengePayload = await verifyJWT(challengeToken, c.env.JWT_SECRET);
+    const body = await c.req.json();
+
+    const rpID = new URL(c.req.url).hostname;
+    const origin = new URL(c.req.url).origin;
+
+    const b64CredentialId = body.id;
+    const passkeyRecord: any = await c.env.DB.prepare('SELECT uuid, credential_id, public_key, counter FROM passkeys WHERE credential_id = ?').bind(b64CredentialId).first();
+
+    if (!passkeyRecord) return c.json({ error: 'Passkey not found' }, 404);
+
+    const credential = {
+      publicKey: isoBase64URL.toBuffer(passkeyRecord.public_key),
+      id: passkeyRecord.credential_id,
+      counter: passkeyRecord.counter,
+    };
+
+    const verification = await verifyAuthenticationResponse({
+      response: body,
+      expectedChallenge: challengePayload.challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      credential,
+      requireUserVerification: false,
+    });
+
+
+    if (verification.verified && verification.authenticationInfo) {
+      await c.env.DB.prepare('UPDATE passkeys SET counter = ? WHERE credential_id = ?').bind(verification.authenticationInfo.newCounter, passkeyRecord.credential_id).run();
+
+      const uuid = passkeyRecord.uuid;
+      let userToAuth: any = null;
+
+      if (uuid === 'admin') {
+        userToAuth = {
+          uuid: 'admin', user_id: "0", name: 'Admin', username: c.env.ADMIN_USERNAME,
+          status: 'active', cookie_expiry_days: 7
+        };
+      } else {
+        const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE uuid = ?').bind(uuid).first();
+        if (!user || user.status === 'paused') {
+          return c.json({ error: 'User omitted or paused' }, 403);
+        }
+        userToAuth = user;
+
+        if (appId) {
+          const permission = await c.env.DB.prepare('SELECT * FROM user_apps WHERE uuid = ? AND app_id = ?').bind(uuid, appId).first();
+          if (!permission) return c.json({ error: 'No permission for this app' }, 403);
+        }
+      }
+
+      const payload = {
+        uuid: userToAuth.uuid,
+        user_id: userToAuth.user_id,
+        name: userToAuth.name,
+        username: userToAuth.username,
+        status: userToAuth.status
+      };
+
+      const jwtToken = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+
+      if (appId && appRedirect) {
+        setCookie(c, 'passkey_login_challenge', '', { maxAge: 0, path: '/' });
+        // Create the local admin token copy so that SSO does not logout admin if admin signs in via SSO to a client.
+        if (uuid === 'admin') {
+          setCookie(c, 'sso_session', jwtToken, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax', maxAge: userToAuth.cookie_expiry_days * 86400 });
+        }
+        return c.json({ verified: true, token: jwtToken });
+      } else {
+        setCookie(c, 'sso_session', jwtToken, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax', maxAge: userToAuth.cookie_expiry_days * 86400 });
+        setCookie(c, 'passkey_login_challenge', '', { maxAge: 0, path: '/' });
+        return c.json({ verified: true, token: jwtToken });
+      }
+    }
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Verification failed' }, 400);
+  }
+  return c.json({ error: 'Failed' }, 400);
+});
 
 // --- Admin Routes ---
 
@@ -548,6 +798,7 @@ app.put('/admin/users/:uuid/password', async (c) => {
 app.delete('/admin/users/:uuid', async (c) => {
   const uuid = c.req.param('uuid');
   await c.env.DB.prepare('DELETE FROM users WHERE uuid = ?').bind(uuid).run();
+  await c.env.DB.prepare('DELETE FROM passkeys WHERE uuid = ?').bind(uuid).run();
   return c.json({ success: true });
 });
 
