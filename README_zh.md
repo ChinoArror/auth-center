@@ -4,7 +4,8 @@
 
 - **灵活集成**：支持简单重定向或标准 SSO 流程，轻松上手。
 - **Agent 用量限制**：（新增！）为基于大模型的 Agent 配置 Token 和请求限额。
-- **可视化数据分析**：（新增！）集成 Cloudflare Analytics Engine SQL API，提供实时流量、浏览器、地理位置分布的精美仪表盘。
+- **可视化数据分析**：（新增！）集成 Cloudflare Analytics Engine SQL API，提供基于访问事件的实时流量、浏览器、地理位置分布仪表盘。
+- **海岸线世界地图**：（新增！）统计页内置海岸线级别的世界地图高亮，以及便于排查统计口径的 Raw Analytics Payload 调试面板。
 - **安全至上**：100% 构建在 Cloudflare 技术栈之上（D1 数据库，Workers 逻辑层）。
 - **GitHub SSO 集成**：支持绑定 GitHub 身份，实现一键安全登录。
 
@@ -64,7 +65,7 @@ ADMIN_GITHUB_ID = "您的_github数字ID"
 - **用户管理**：创建账户与限制访问权限，支持立刻暂停或恢复。
 - **应用管理**：注册新的 Web Apps 接入此中心，并可配置是否开启 **Agent 用量限制**。点击应用名称进入详情页可查看实时 Token 消耗图表。
 - **权限管理矩阵**：指定哪些用户有权登录哪些 App 的可视化界面映射。
-- **Analytics 数据看板**：整合了 Cloudflare GraphQL 的内置图表，查看整体登入行为统计与客户端环境占比。
+- **Analytics 数据看板**：基于 Cloudflare Analytics Engine SQL API 聚合 `page_view`、`login_success`、`sso_auto_login` 三类访问事件，默认排除 `quota_consume`，并提供世界地图与 Raw Analytics Payload 调试面板。
 
 ### 接口调用范例：子应用对接 SSO 流水线
 
@@ -87,6 +88,10 @@ ADMIN_GITHUB_ID = "您的_github数字ID"
 ```
 
 JWT Payload 包含字段：`{ uuid, user_id, name, username, status, exp }`。`name` 和 `username` 两个字段均已包含，子应用可以直接用于显示用户名或账号名。
+
+#### 1.1 Analytics 统计口径说明
+
+管理后台 `Statistics` 页默认只统计访问类事件：`page_view`、`login_success`、`sso_auto_login`。像 `quota_consume` 这样的内部配额写入不会计入访问量，避免把 Token 消耗误算成访问次数。页面底部的 `Raw Analytics Payload` 会直接展示参与统计的原始聚合结果，并保留 `event_type` 字段，方便核对统计来源。
 
 #### 2. OAuth 风格前端无感知对接 (推荐)
 

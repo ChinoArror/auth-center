@@ -20,6 +20,264 @@ function getAppIcon(appId: string) {
   return APP_ICONS[hash % APP_ICONS.length];
 }
 
+const NUMBER_UNITS = ['', 'K', 'M', 'G', 'T', 'P'];
+const ACCESS_EVENT_TYPES = new Set(['page_view', 'login_success', 'sso_auto_login']);
+const REGION_LABELS = typeof Intl !== 'undefined' && 'DisplayNames' in Intl
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+const WORLD_LANDMASSES = [
+  'M45 145L54 120L68 101L85 88L101 72L118 63L138 55L160 53L181 57L199 67L214 78L226 94L228 109L223 118L211 121L198 116L182 115L168 122L158 136L144 146L126 157L110 168L92 179L79 187L67 186L57 173L49 157L45 145Z',
+  'M209 46L224 37L244 35L263 39L279 49L285 64L280 78L266 84L248 83L229 75L214 60L209 46Z',
+  'M198 208L214 206L230 213L245 226L255 243L263 263L265 286L262 310L255 334L244 353L232 363L221 358L216 338L214 316L208 296L201 275L193 255L191 235L194 220L198 208Z',
+  'M356 103L367 96L381 92L396 92L410 97L423 105L432 115L434 125L427 132L414 131L402 134L392 141L379 143L366 138L357 128L353 116L356 103Z',
+  'M382 151L395 146L410 147L424 154L435 167L442 183L445 201L443 221L438 242L430 262L420 281L408 292L397 289L391 273L389 252L386 231L380 212L374 193L372 176L375 162L382 151Z',
+  'M430 93L451 82L476 75L508 71L543 71L577 75L611 83L642 95L666 108L679 122L678 135L667 147L648 152L629 158L611 167L596 181L586 196L574 204L560 208L546 205L534 196L524 183L516 170L504 160L489 154L471 149L454 141L441 128L433 113L430 93Z',
+  'M506 166L520 166L536 173L548 185L554 200L554 214L548 227L540 239L536 253L540 267L552 276L569 276L584 270L598 262L612 257L625 260L634 269L638 282L634 291L622 295L607 294L592 290L578 284L566 275L554 263L543 248L531 233L520 219L511 202L506 184L506 166Z',
+  'M683 145L692 142L700 148L703 158L700 168L692 175L685 170L682 158L683 145Z',
+  'M603 288L619 282L638 280L659 281L678 287L694 297L703 310L702 324L691 334L671 340L649 340L628 334L612 324L603 311L601 298L603 288Z',
+  'M446 293L453 297L456 308L454 320L447 328L442 318L443 305L446 293Z',
+];
+
+const COUNTRY_COORDINATES: Record<string, { x: number; y: number }> = {
+  AR: { x: 249, y: 326 },
+  AU: { x: 680, y: 317 },
+  BD: { x: 579, y: 205 },
+  BE: { x: 403, y: 121 },
+  BR: { x: 247, y: 269 },
+  CA: { x: 149, y: 92 },
+  CH: { x: 413, y: 133 },
+  CL: { x: 230, y: 315 },
+  CN: { x: 619, y: 164 },
+  CO: { x: 206, y: 232 },
+  DE: { x: 415, y: 118 },
+  EG: { x: 445, y: 181 },
+  ES: { x: 389, y: 149 },
+  FR: { x: 399, y: 131 },
+  GB: { x: 388, y: 105 },
+  HK: { x: 631, y: 184 },
+  ID: { x: 630, y: 268 },
+  IE: { x: 377, y: 108 },
+  IN: { x: 558, y: 199 },
+  IT: { x: 421, y: 147 },
+  JP: { x: 691, y: 158 },
+  KR: { x: 659, y: 149 },
+  MX: { x: 144, y: 170 },
+  MY: { x: 594, y: 247 },
+  NG: { x: 420, y: 226 },
+  NL: { x: 405, y: 116 },
+  NO: { x: 419, y: 81 },
+  NZ: { x: 747, y: 344 },
+  PH: { x: 646, y: 223 },
+  PK: { x: 532, y: 181 },
+  PL: { x: 432, y: 119 },
+  PT: { x: 378, y: 150 },
+  RU: { x: 509, y: 82 },
+  SA: { x: 486, y: 188 },
+  SE: { x: 431, y: 84 },
+  SG: { x: 601, y: 252 },
+  TH: { x: 591, y: 223 },
+  TR: { x: 462, y: 151 },
+  TW: { x: 648, y: 182 },
+  UA: { x: 452, y: 125 },
+  US: { x: 167, y: 137 },
+  VN: { x: 608, y: 217 },
+  ZA: { x: 453, y: 327 },
+};
+
+function roundToTwo(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function formatCompactNumber(value: number | string | null | undefined) {
+  const numericValue = typeof value === 'string' ? Number(value) : value ?? 0;
+  if (!Number.isFinite(numericValue)) return '0.00';
+
+  let scaledValue = numericValue;
+  let unitIndex = 0;
+  while (Math.abs(scaledValue) >= 1000 && unitIndex < NUMBER_UNITS.length - 1) {
+    scaledValue /= 1000;
+    unitIndex += 1;
+  }
+
+  let roundedValue = roundToTwo(scaledValue);
+  while (Math.abs(roundedValue) >= 1000 && unitIndex < NUMBER_UNITS.length - 1) {
+    scaledValue = roundedValue / 1000;
+    unitIndex += 1;
+    roundedValue = roundToTwo(scaledValue);
+  }
+
+  return `${roundedValue.toFixed(2)}${NUMBER_UNITS[unitIndex]}`;
+}
+
+function formatPercent(value: number) {
+  return `${roundToTwo(value).toFixed(2)}%`;
+}
+
+function normalizeAnalyticsPayload(payload: any) {
+  return {
+    ...payload,
+    data: Array.isArray(payload?.data)
+      ? payload.data.map((row: Record<string, unknown>) => Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, typeof value === 'number' ? roundToTwo(value) : value])
+      ))
+      : []
+  };
+}
+
+function isSupportedRegionCode(code: string) {
+  return /^[A-Z]{2}$/.test(code) || /^\d{3}$/.test(code);
+}
+
+function getRegionLabel(code: string) {
+  const normalizedCode = (code || '').toUpperCase();
+  if (!normalizedCode || normalizedCode === 'UNKNOWN') return 'Unknown Region';
+  if (!isSupportedRegionCode(normalizedCode)) return normalizedCode;
+  try {
+    return REGION_LABELS?.of(normalizedCode) || normalizedCode;
+  } catch {
+    return normalizedCode;
+  }
+}
+
+function WorldActivityMap({ countries, topCountry }: { countries: Array<{ name: string; value: number }>; topCountry: string }) {
+  const mappedCountries = countries
+    .map((country) => {
+      const code = String(country.name || '').toUpperCase();
+      const coordinates = COUNTRY_COORDINATES[code];
+      return {
+        ...country,
+        code,
+        label: getRegionLabel(code),
+        coordinates,
+      };
+    })
+    .filter((country) => country.coordinates)
+    .slice(0, 12);
+
+  const hiddenCountries = countries
+    .map((country) => {
+      const code = String(country.name || '').toUpperCase();
+      return {
+        ...country,
+        code,
+        label: getRegionLabel(code),
+      };
+    })
+    .filter((country) => !COUNTRY_COORDINATES[country.code])
+    .slice(0, 6);
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 backdrop-blur-sm">
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3 mb-8">
+        <div>
+          <h3 className="text-xl font-bold text-white flex items-center gap-2">
+            <Globe className="text-cyan-300 w-5 h-5" />
+            Global Visitor Map
+          </h3>
+          <p className="text-sm text-white/45 mt-2">
+            Coastline-level world silhouette with highlighted active visitor regions, led by {getRegionLabel(topCountry)}.
+          </p>
+        </div>
+        <div className="text-sm text-white/35">
+          Highlighting the top {mappedCountries.length || countries.length} active regions from the last 30 days.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(260px,0.9fr)] gap-6">
+        <div className="rounded-[2rem] border border-white/10 bg-[#07111f] overflow-hidden">
+          <svg viewBox="0 0 800 400" className="w-full h-full min-h-[300px]">
+            <defs>
+              <linearGradient id="worldMapBg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#081325" />
+                <stop offset="100%" stopColor="#0f1f35" />
+              </linearGradient>
+              <radialGradient id="worldGlow" cx="50%" cy="45%" r="65%">
+                <stop offset="0%" stopColor="rgba(56,189,248,0.18)" />
+                <stop offset="100%" stopColor="rgba(56,189,248,0)" />
+              </radialGradient>
+            </defs>
+
+            <rect width="800" height="400" fill="url(#worldMapBg)" />
+            <rect width="800" height="400" fill="url(#worldGlow)" />
+
+            {WORLD_LANDMASSES.map((path, index) => (
+              <path
+                key={index}
+                d={path}
+                fill="rgba(148, 163, 184, 0.16)"
+                stroke="rgba(148, 163, 184, 0.34)"
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+              />
+            ))}
+
+            {mappedCountries.map((country, index) => {
+              const radius = 8 + Math.min(12, Math.log10(country.value + 1) * 5);
+              return (
+                <g key={country.code}>
+                  <circle
+                    cx={country.coordinates!.x}
+                    cy={country.coordinates!.y}
+                    r={radius + 10}
+                    fill="rgba(34, 211, 238, 0.10)"
+                  />
+                  <circle
+                    cx={country.coordinates!.x}
+                    cy={country.coordinates!.y}
+                    r={radius + 4}
+                    fill="rgba(34, 211, 238, 0.18)"
+                  />
+                  <circle
+                    cx={country.coordinates!.x}
+                    cy={country.coordinates!.y}
+                    r={radius}
+                    fill={index === 0 ? '#f59e0b' : '#22d3ee'}
+                    stroke="rgba(255,255,255,0.85)"
+                    strokeWidth="2"
+                  />
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        <div className="space-y-3">
+          {mappedCountries.length ? mappedCountries.map((country, index) => (
+            <div key={country.code} className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex w-2.5 h-2.5 rounded-full ${index === 0 ? 'bg-amber-400' : 'bg-cyan-400'}`}></span>
+                  <span className="text-white font-medium truncate">{country.label}</span>
+                </div>
+                <p className="text-xs text-white/35 mt-1">{country.code}</p>
+              </div>
+              <span className="text-sm font-mono text-white/80">{formatCompactNumber(country.value)}</span>
+            </div>
+          )) : (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-4 py-6 text-sm text-white/40">
+              No region-level visitor data is available yet.
+            </div>
+          )}
+
+          {hiddenCountries.length > 0 && (
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-white/30 mb-3">Additional Active Regions</p>
+              <div className="flex flex-wrap gap-2">
+                {hiddenCountries.map((country) => (
+                  <span key={country.code} className="px-3 py-1.5 rounded-full bg-white/5 text-xs text-white/60 border border-white/10">
+                    {country.label} · {formatCompactNumber(country.value)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard() {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [isLogged, setIsLogged] = useState(false);
@@ -241,7 +499,7 @@ function Dashboard() {
     try {
       const res = await authFetch('/admin/stats/usage');
       if (res.ok) {
-        const data = await res.json();
+        const data = normalizeAnalyticsPayload(await res.json());
         setStatsData(data);
       }
     } catch (e) {
@@ -801,12 +1059,12 @@ function Dashboard() {
             )}
 
             {activeTab === 'statistics' && (() => {
-              const data = statsData?.data || [];
+              const rawData = statsData?.data || [];
+              const data = rawData.filter((item: any) => ACCESS_EVENT_TYPES.has(String(item.event_type || '')));
 
               // 1. KPI Aggregations
               const totalEvents = data.reduce((acc: number, c: any) => acc + (c.events || 0), 0);
               const uniqueUsers = new Set(data.map((c: any) => c.uuid)).size;
-              const totalValue = data.reduce((acc: number, c: any) => acc + (c.total_value || 0), 0);
 
               const getTop = (key: string) => {
                 const map: any = {};
@@ -851,7 +1109,8 @@ function Dashboard() {
 
               const browsersData = getBreakdown('browser');
               const countriesData = getBreakdown('country');
-              const devicesData = getBreakdown('device');
+              const mapCountriesData = getBreakdown('country', 12);
+              const eventTypeData = getBreakdown('event_type', 3);
               const appsData = getBreakdown('app_id').map(item => ({
                 ...item,
                 name: apps.find(a => a.app_id === item.name)?.display_name || item.name
@@ -868,7 +1127,17 @@ function Dashboard() {
                         <BarChart3 className="text-purple-400 w-8 h-8" />
                         System Analytics
                       </h1>
-                      <p className="text-white/50 text-lg">Real-time health and usage overview of your Auth ecosystem.</p>
+                      <p className="text-white/50 text-lg">Real-time access analytics overview of your Auth ecosystem.</p>
+                      <p className="text-white/30 text-sm mt-3">
+                        Metrics below are aggregated from access events only: <span className="text-white/55">page_view</span>, <span className="text-white/55">login_success</span>, and <span className="text-white/55">sso_auto_login</span>. Quota writes are excluded.
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-4">
+                        {eventTypeData.map((event: any) => (
+                          <span key={event.name} className="px-3 py-1.5 rounded-full border border-white/10 bg-black/20 text-xs text-white/60">
+                            {event.name}: {formatCompactNumber(event.value)}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                     <div className="flex items-center gap-3 relative">
                       <button onClick={fetchStats} className={`p-4 rounded-2xl border border-white/10 bg-white/5 text-white/70 hover:bg-white/10 transition-all hover:scale-105 active:scale-95 ${loadingStats ? 'opacity-50 cursor-not-allowed' : ''}`}>
@@ -880,10 +1149,10 @@ function Dashboard() {
                   {/* KPI Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     {[
-                      { label: 'Total Visits', value: totalEvents, sub: 'Total pings processed', icon: Activity, color: 'blue' },
+                      { label: 'Total Visits', value: totalEvents, sub: 'Access events counted', icon: Activity, color: 'blue' },
                       { label: 'Unique Visitors', value: uniqueUsers, sub: 'Distinct user IDs', icon: Users, color: 'purple' },
                       { label: 'Top Browser', value: topBrowser, sub: 'Preferred environment', icon: Globe, color: 'emerald' },
-                      { label: 'Hot Application', value: topApp, sub: 'Most active integration', icon: Zap, color: 'amber' },
+                      { label: 'Hot Application', value: topApp, sub: 'Most active access source', icon: Zap, color: 'amber' },
                     ].map((kpi, idx) => (
                       <motion.div
                         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.1 }}
@@ -893,7 +1162,9 @@ function Dashboard() {
                           <kpi.icon className="w-6 h-6" />
                         </div>
                         <p className="text-white/40 text-sm font-medium mb-1">{kpi.label}</p>
-                        <p className="text-3xl font-bold text-white mb-1 truncate">{loadingStats ? '...' : kpi.value}</p>
+                        <p className="text-3xl font-bold text-white mb-1 truncate">
+                          {loadingStats ? '...' : typeof kpi.value === 'number' ? formatCompactNumber(kpi.value) : kpi.value}
+                        </p>
                         <p className="text-xs text-white/20">{kpi.sub}</p>
                       </motion.div>
                     ))}
@@ -908,8 +1179,8 @@ function Dashboard() {
                         <span className="flex items-center gap-1.5 text-blue-400"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Unique Users</span>
                       </div>
                     </div>
-                    <div className="h-[400px] w-full">
-                      <ResponsiveContainer width="100%" height="100%">
+                    <div className="h-[400px] w-full min-w-0 min-h-[400px]">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
                         <AreaChart data={dailyData}>
                           <defs>
                             <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#A855F7" stopOpacity={0.3} /><stop offset="95%" stopColor="#A855F7" stopOpacity={0} /></linearGradient>
@@ -917,10 +1188,11 @@ function Dashboard() {
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                           <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 12 }} dy={10} />
-                          <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 12 }} />
+                          <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 12 }} tickFormatter={(value) => formatCompactNumber(value)} />
                           <RechartsTooltip
                             contentStyle={{ backgroundColor: '#0F172A', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', color: '#fff' }}
                             itemStyle={{ color: '#fff' }}
+                            formatter={(value: number | string) => formatCompactNumber(value)}
                           />
                           <Area type="monotone" dataKey="visits" stroke="#A855F7" fillOpacity={1} fill="url(#colorVisits)" strokeWidth={3} />
                           <Area type="monotone" dataKey="users" stroke="#3B82F6" fillOpacity={1} fill="url(#colorUsers)" strokeWidth={3} />
@@ -941,11 +1213,11 @@ function Dashboard() {
                             <div className="flex-1">
                               <div className="flex justify-between items-end mb-2">
                                 <span className="text-white font-medium">{app.name}</span>
-                                <span className="text-white/40 text-sm">{app.value} events</span>
+                                <span className="text-white/40 text-sm">{formatCompactNumber(app.value)} events</span>
                               </div>
                               <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
                                 <motion.div
-                                  initial={{ width: 0 }} animate={{ width: `${(app.value / totalEvents) * 100}%` }}
+                                  initial={{ width: 0 }} animate={{ width: `${totalEvents > 0 ? (app.value / totalEvents) * 100 : 0}%` }}
                                   className="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full"
                                 />
                               </div>
@@ -957,41 +1229,41 @@ function Dashboard() {
 
                     {/* Geo / Browser Mix */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center">
+                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center min-w-0">
                         <h3 className="text-lg font-bold text-white mb-6 self-start flex items-center gap-2"><Globe className="text-emerald-400 w-4 h-4" /> Countries</h3>
-                        <div className="h-48 w-full">
-                          <ResponsiveContainer>
+                        <div className="h-48 w-full min-w-0 min-h-[12rem]">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={160}>
                             <RePieChart>
                               <Pie data={countriesData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
                                 {countriesData.map((entry, index) => (
                                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none" />
                                 ))}
                               </Pie>
-                              <RechartsTooltip />
+                              <RechartsTooltip formatter={(value: number | string) => formatCompactNumber(value)} />
                             </RePieChart>
                           </ResponsiveContainer>
                         </div>
                         <div className="mt-4 w-full space-y-2">
                           {countriesData.map((c, i) => (
                             <div key={c.name} className="flex justify-between text-xs items-center text-white/70">
-                              <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></div> {c.name}</span>
-                              <span className="text-white/30 font-mono">{Math.round((c.value / totalEvents) * 100)}%</span>
+                              <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></div> {getRegionLabel(c.name)}</span>
+                              <span className="text-white/30 font-mono">{formatPercent(totalEvents > 0 ? (c.value / totalEvents) * 100 : 0)}</span>
                             </div>
                           ))}
                         </div>
                       </div>
 
-                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center">
+                      <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 flex flex-col items-center min-w-0">
                         <h3 className="text-lg font-bold text-white mb-6 self-start flex items-center gap-2"><PieChart className="text-blue-400 w-4 h-4" /> Browsers</h3>
-                        <div className="h-48 w-full">
-                          <ResponsiveContainer>
+                        <div className="h-48 w-full min-w-0 min-h-[12rem]">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={160}>
                             <RePieChart>
                               <Pie data={browsersData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
                                 {browsersData.map((entry, index) => (
                                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none" />
                                 ))}
                               </Pie>
-                              <RechartsTooltip />
+                              <RechartsTooltip formatter={(value: number | string) => formatCompactNumber(value)} />
                             </RePieChart>
                           </ResponsiveContainer>
                         </div>
@@ -999,7 +1271,7 @@ function Dashboard() {
                           {browsersData.map((b, i) => (
                             <div key={b.name} className="flex justify-between text-xs items-center text-white/70">
                               <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></div> {b.name}</span>
-                              <span className="text-white/30 font-mono">{Math.round((b.value / totalEvents) * 100)}%</span>
+                              <span className="text-white/30 font-mono">{formatPercent(totalEvents > 0 ? (b.value / totalEvents) * 100 : 0)}</span>
                             </div>
                           ))}
                         </div>
@@ -1007,11 +1279,13 @@ function Dashboard() {
                     </div>
                   </div>
 
+                  <WorldActivityMap countries={mapCountriesData} topCountry={topCountry} />
+
                   {/* JSON Footer for debugging */}
                   <details className="mt-12 text-white/10 text-xs">
-                    <summary className="cursor-pointer hover:text-white/30 transition-colors">Raw Analytics Payload</summary>
+                    <summary className="cursor-pointer hover:text-white/30 transition-colors">Raw Analytics Payload (access events only)</summary>
                     <pre className="p-4 bg-black/40 rounded-3xl border border-white/5 mt-4 overflow-auto max-h-64">
-                      {JSON.stringify(data, null, 2)}
+                      {JSON.stringify(rawData, null, 2)}
                     </pre>
                   </details>
                 </div>

@@ -953,6 +953,7 @@ app.get('/admin/stats/usage', async (c) => {
       toDate(timestamp) AS day,
       blob1 AS app_id,
       blob2 AS uuid,
+      blob3 AS event_type,
       blob4 AS country,
       blob5 AS device,
       blob6 AS browser,
@@ -960,7 +961,9 @@ app.get('/admin/stats/usage', async (c) => {
       COUNT() AS events
     FROM "auth-center"
     WHERE timestamp >= now() - INTERVAL '30' DAY
-    GROUP BY day, app_id, uuid, country, device, browser
+      AND blob3 IN ('page_view', 'login_success', 'sso_auto_login')
+    GROUP BY day, app_id, uuid, event_type, country, device, browser
+    ORDER BY day ASC
     LIMIT 10000
   `;
 

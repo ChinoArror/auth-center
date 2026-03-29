@@ -4,7 +4,8 @@ This is a unified Single Sign-On (SSO) and Analytics system built on Cloudflare 
 
 - **Flexible Integration**: Simple redirection or standard SSO flows with ease.
 - **Agent Usage Limits**: (New!) Configure token and request quotas for LLM-based agents.
-- **Visual Analytics Dashboard**: (New!) Premium dashboard with real-time charts (Visits, Browsers, GEO) using Cloudflare Analytics Engine SQL API.
+- **Visual Analytics Dashboard**: (New!) Premium dashboard with real-time access-event charts (Visits, Browsers, GEO) using Cloudflare Analytics Engine SQL API.
+- **Coastline World Map**: (New!) The statistics page highlights active regions on a coastline-style world map and exposes a raw payload inspector for debugging.
 - **Security First**: 100% on Cloudflare Stack (D1 for database, Workers for logic).
 - **GitHub SSO Integration**: Bind GitHub identities for one-click secure access.
 
@@ -159,6 +160,8 @@ Sub-apps can send usage data to the centralized Analytics Engine.
 ```
 
 The system automatically records the user's country (via Cloudflare headers) and parses the `User-Agent` to determine the device type and browser.
+
+The admin `Statistics` dashboard aggregates access events only: `page_view`, `login_success`, and `sso_auto_login`. Internal quota writes such as `quota_consume` are excluded from visit metrics so quota traffic does not inflate the dashboard. The `Raw Analytics Payload` panel on the page exposes the filtered rows, including `event_type`, to make the aggregation easier to verify.
 
 ### User Self-Service Password Change
 
