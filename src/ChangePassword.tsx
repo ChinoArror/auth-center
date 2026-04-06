@@ -1,126 +1,135 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
-import { KeyRound, Shield, Eye, EyeOff } from 'lucide-react';
-import { useParams } from 'react-router-dom';
-
-const API_BASE = '';
+import { Eye, EyeOff, KeyRound } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import {
+  API_BASE,
+  UserLogoutButton,
+  UserPortalLoading,
+  UserPortalScaffold,
+  useRequiredUserSession,
+} from './userPortal';
 
 export default function ChangePassword() {
-    const { uuid } = useParams();
-    const [oldPassword, setOldPassword] = useState('');
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [showOld, setShowOld] = useState(false);
-    const [showNew, setShowNew] = useState(false);
-    const [showConfirm, setShowConfirm] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState('');
-    const [error, setError] = useState('');
-    const [success, setSuccess] = useState(false);
+  const { uuid } = useParams();
+  const { session, loading } = useRequiredUserSession(uuid);
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [showNew, setShowNew] = React.useState(false);
+  const [showConfirm, setShowConfirm] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [message, setMessage] = React.useState('');
+  const [error, setError] = React.useState('');
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (newPassword !== confirmPassword) {
-            setError('New passwords do not match');
-            return;
-        }
-        setError('');
-        setMessage('');
-        setLoading(true);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setError('The new passwords do not match.');
+      return;
+    }
 
-        try {
-            const res = await fetch(`${API_BASE}/api/users/${uuid}/change-password`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ oldPassword, newPassword })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setSuccess(true);
-                setMessage('Password updated successfully. You can now log in with your new password.');
-            } else {
-                setError(data.error || 'Failed to update password');
-            }
-        } catch (err: any) {
-            setError(err.message);
-        }
-        setLoading(false);
-    };
+    setSaving(true);
+    setError('');
+    setMessage('');
 
-    return (
-        <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4 overflow-hidden z-50">
-            <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none" />
-            <div className="absolute top-[10%] left-[-10%] w-[50%] h-[50%] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
+    try {
+      const res = await fetch(`${API_BASE}/api/user/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Unable to update password');
+        return;
+      }
 
-            <motion.div
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                className="bg-black/40 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10 relative z-10"
-            >
-                <div className="flex justify-center mb-6">
-                    <div className="p-4 bg-gradient-to-tr from-blue-600 to-emerald-600 rounded-2xl shadow-lg shadow-emerald-500/20">
-                        <KeyRound className="w-10 h-10 text-white" />
-                    </div>
-                </div>
+      setMessage('Your password has been updated.');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Unable to update password');
+    } finally {
+      setSaving(false);
+    }
+  };
 
-                <h2 className="text-3xl font-bold text-center text-white mb-2 tracking-tight">Change Password</h2>
-                <p className="text-purple-300/80 text-center mb-8 font-medium">Update your account security credentials</p>
+  return (
+    <UserPortalScaffold
+      title="Change Password"
+      description="You are already verified through your current session, so you only need to enter the new password."
+      actions={<UserLogoutButton />}
+    >
+      {loading || !session ? (
+        <UserPortalLoading label="Checking your session..." />
+      ) : (
+        <div className="mx-auto max-w-2xl space-y-4">
+          <div className="ui-card p-6">
+            <div className="flex items-start gap-4">
+              <div className="ui-logo-badge">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--text-primary)]">Set a new password</h2>
+                <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                  This update applies to <span className="font-semibold text-[var(--text-primary)]">@{session.username}</span>.
+                </p>
+              </div>
+            </div>
+          </div>
 
-                {success ? (
-                    <div className="text-center space-y-4">
-                        <div className="bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 p-4 rounded-xl font-medium">{message}</div>
-                        <p className="text-white/60 text-sm">You can close this window now.</p>
-                    </div>
-                ) : (
-                    <form onSubmit={handleSubmit} className="space-y-5">
-                        {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-xl border border-red-500/30 text-sm font-medium text-center">{error}</div>}
+          <form onSubmit={handleSubmit} className="ui-card space-y-4 p-6">
+            {error ? <div className="rounded-[var(--radius-md)] border border-[var(--border)] px-4 py-3 text-sm text-[var(--danger)]">{error}</div> : null}
+            {message ? <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-3 text-sm text-[var(--text-primary)]">{message}</div> : null}
 
-                        <div className="space-y-4">
-                            <div className="relative">
-                                <input
-                                    type={showOld ? "text" : "password"} required placeholder="Current Password"
-                                    className="w-full bg-white/5 border border-white/10 text-white placeholder-white/30 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-purple-500 transition-all duration-300 pr-10"
-                                    value={oldPassword} onChange={e => setOldPassword(e.target.value)}
-                                />
-                                <button type="button" onClick={() => setShowOld(!showOld)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors">
-                                    {showOld ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                </button>
-                            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">New password</label>
+              <div className="relative">
+                <input
+                  type={showNew ? 'text' : 'password'}
+                  required
+                  autoComplete="new-password"
+                  placeholder="New password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  className="pr-12"
+                />
+                <button type="button" onClick={() => setShowNew((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
+                  {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
 
-                            <div className="relative">
-                                <input
-                                    type={showNew ? "text" : "password"} required placeholder="New Password"
-                                    className="w-full bg-white/5 border border-white/10 text-white placeholder-white/30 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-emerald-500 transition-all duration-300 pr-10"
-                                    value={newPassword} onChange={e => setNewPassword(e.target.value)}
-                                />
-                                <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors">
-                                    {showNew ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                </button>
-                            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Confirm password</label>
+              <div className="relative">
+                <input
+                  type={showConfirm ? 'text' : 'password'}
+                  required
+                  autoComplete="new-password"
+                  placeholder="Confirm password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  className="pr-12"
+                />
+                <button type="button" onClick={() => setShowConfirm((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
+                  {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
 
-                            <div className="relative">
-                                <input
-                                    type={showConfirm ? "text" : "password"} required placeholder="Confirm New Password"
-                                    className="w-full bg-white/5 border border-white/10 text-white placeholder-white/30 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-emerald-500 transition-all duration-300 pr-10"
-                                    value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
-                                />
-                                <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors">
-                                    {showConfirm ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                </button>
-                            </div>
-                        </div>
+            <motion.button whileHover={{ y: -1 }} whileTap={{ scale: 0.99 }} className="ui-button-primary w-full" disabled={saving}>
+              {saving ? 'Updating...' : 'Update Password'}
+            </motion.button>
+          </form>
 
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            disabled={loading}
-                            className={`w-full bg-gradient-to-r from-blue-600 via-emerald-600 to-teal-500 text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-emerald-500/20 transition-all mt-6 border border-white/10 ${loading ? 'opacity-70 cursor-not-allowed' : 'hover:filter-brightness-110'}`}
-                        >
-                            {loading ? 'Updating...' : 'Securely Update Password'}
-                        </motion.button>
-                    </form>
-                )}
-            </motion.div>
+          <div className="text-center text-sm text-[var(--text-secondary)]">
+            <Link to={`/${session.uuid}`} className="font-semibold text-[var(--primary)] no-underline">
+              Back to account center
+            </Link>
+          </div>
         </div>
-    );
+      )}
+    </UserPortalScaffold>
+  );
 }

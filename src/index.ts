@@ -5,6 +5,10 @@ import { hashPassword, generateSalt, verifyPassword, generateJWT, verifyJWT } fr
 import { getCookie, setCookie } from 'hono/cookie';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 
+type D1Database = any;
+type AnalyticsEngineDataset = any;
+type Fetcher = any;
+
 type Bindings = {
   DB: D1Database;
   ANALYTICS: AnalyticsEngineDataset;
@@ -23,11 +27,121 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 app.use('*', cors());
 
+function getClientIp(c: any) {
+  return c.req.header('CF-Connecting-IP')
+    || c.req.header('X-Forwarded-For')?.split(',')[0]?.trim()
+    || null;
+}
+
+function detectClientEnvironment(userAgent: string) {
+  let deviceType = 'Desktop';
+  if (/Mobile|Android|iP(hone|od|ad)/i.test(userAgent)) {
+    deviceType = 'Mobile';
+  } else if (/Tablet|iPad/i.test(userAgent)) {
+    deviceType = 'Tablet';
+  }
+
+  let browser = 'Other';
+  if (/Edg/i.test(userAgent)) browser = 'Edge';
+  else if (/Chrome/i.test(userAgent)) browser = 'Chrome';
+  else if (/Safari/i.test(userAgent)) browser = 'Safari';
+  else if (/Firefox/i.test(userAgent)) browser = 'Firefox';
+
+  return { deviceType, browser };
+}
+
+async function persistUserSession(c: any, user: any, sessionId: string, expiresAt: string, appId: string | null = null) {
+  const userAgent = c.req.header('User-Agent') || '';
+  const { browser, deviceType } = detectClientEnvironment(userAgent);
+  const ipAddress = getClientIp(c);
+
+  await c.env.DB.prepare(`
+    INSERT INTO user_sessions (
+      session_id, uuid, username, ip_address, user_agent, browser, device_type, app_id, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    sessionId,
+    user.uuid,
+    user.username,
+    ipAddress,
+    userAgent,
+    browser,
+    deviceType,
+    appId || 'auth-center',
+    expiresAt
+  ).run();
+}
+
+function setUserSessionCookie(c: any, token: string, maxAgeSeconds: number) {
+  setCookie(c, 'sso_session', token, {
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'Lax',
+    maxAge: maxAgeSeconds
+  });
+}
+
+function sanitizeRedirectPath(input: unknown, fallback: string) {
+  if (typeof input !== 'string') return fallback;
+  if (!input.startsWith('/') || input.startsWith('//')) return fallback;
+  return input;
+}
+
+async function revokeSession(c: any, sessionId: string) {
+  await c.env.DB.prepare(
+    'UPDATE user_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE session_id = ? AND revoked_at IS NULL'
+  ).bind(sessionId).run();
+}
+
+async function authenticateCookieSession(c: any, allowAdmin = false) {
+  const token = getCookie(c, 'sso_session');
+  if (!token) return null;
+
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+
+    if (payload.uuid === 'admin') {
+      return allowAdmin ? { token, payload, session: null } : null;
+    }
+
+    if (!payload.session_id) return null;
+
+    const user: any = await c.env.DB.prepare(
+      'SELECT uuid, username, name, status, cookie_expiry_days FROM users WHERE uuid = ?'
+    ).bind(payload.uuid).first();
+
+    if (!user || user.status !== 'active') return null;
+
+    const session: any = await c.env.DB.prepare(`
+      SELECT session_id, uuid, username, login_at, ip_address, browser, device_type, app_id, expires_at, revoked_at
+      FROM user_sessions
+      WHERE session_id = ?
+    `).bind(payload.session_id).first();
+
+    if (!session || session.revoked_at) return null;
+
+    const expiresAtMs = Date.parse(session.expires_at);
+    if (!Number.isNaN(expiresAtMs) && expiresAtMs <= Date.now()) {
+      await revokeSession(c, payload.session_id);
+      return null;
+    }
+
+    await c.env.DB.prepare(
+      'UPDATE user_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE session_id = ?'
+    ).bind(payload.session_id).run();
+
+    return { token, payload, user, session };
+  } catch {
+    return null;
+  }
+}
+
 // --- Public Routes ---
 
 // Login
 app.post('/login', async (c) => {
-  const { username, password } = await c.req.json();
+  const { username, password, app_id } = await c.req.json();
   if (!username || !password) {
     return c.json({ error: 'Username and password required' }, 400);
   }
@@ -71,15 +185,17 @@ app.post('/login', async (c) => {
     status: userToAuth.status
   };
 
-  const token = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+  let tokenPayload: any = payload;
+  if (userToAuth.uuid !== 'admin') {
+    const sessionId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + userToAuth.cookie_expiry_days * 86400 * 1000).toISOString();
+    await persistUserSession(c, userToAuth, sessionId, expiresAt, app_id || 'auth-center');
+    tokenPayload = { ...payload, session_id: sessionId };
+  }
 
-  setCookie(c, 'sso_session', token, {
-    path: '/',
-    secure: true,
-    httpOnly: true,
-    sameSite: 'Lax',
-    maxAge: userToAuth.cookie_expiry_days * 86400
-  });
+  const token = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+
+  setUserSessionCookie(c, token, userToAuth.cookie_expiry_days * 86400);
 
   return c.json({
     token: token,
@@ -92,13 +208,61 @@ app.post('/login', async (c) => {
   });
 });
 
+app.post('/api/users/login', async (c) => {
+  const { username, password, redirect_to } = await c.req.json();
+  if (!username || !password) {
+    return c.json({ error: 'Username and password required' }, 400);
+  }
+
+  if (username === c.env.ADMIN_USERNAME) {
+    return c.json({ error: 'Admin accounts must use the admin login' }, 403);
+  }
+
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
+  if (!user) return c.json({ error: 'Invalid credentials' }, 401);
+  if (user.status === 'paused') return c.json({ error: 'Account is paused' }, 403);
+
+  const isValid = await verifyPassword(password, user.password_salt, user.password_hash);
+  if (!isValid) return c.json({ error: 'Invalid credentials' }, 401);
+
+  const sessionId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + user.cookie_expiry_days * 86400 * 1000).toISOString();
+  await persistUserSession(c, user, sessionId, expiresAt, 'user-portal');
+
+  const token = await generateJWT({
+    uuid: user.uuid,
+    user_id: user.user_id,
+    name: user.name,
+    username: user.username,
+    status: user.status,
+    session_id: sessionId
+  } as any, c.env.JWT_SECRET, user.cookie_expiry_days);
+
+  setUserSessionCookie(c, token, user.cookie_expiry_days * 86400);
+
+  return c.json({
+    success: true,
+    uuid: user.uuid,
+    username: user.username,
+    redirect_to: sanitizeRedirectPath(redirect_to, `/${user.uuid}`)
+  });
+});
+
 // Logout
 app.post('/api/logout', async (c) => {
+  const activeSession = await authenticateCookieSession(c, true);
+  if (activeSession?.payload?.session_id) {
+    await revokeSession(c, activeSession.payload.session_id);
+  }
   setCookie(c, 'sso_session', '', { path: '/', maxAge: 0, secure: true, httpOnly: true, sameSite: 'Lax' });
   return c.json({ success: true });
 });
 
 app.get('/logout', async (c) => {
+  const activeSession = await authenticateCookieSession(c, true);
+  if (activeSession?.payload?.session_id) {
+    await revokeSession(c, activeSession.payload.session_id);
+  }
   setCookie(c, 'sso_session', '', { path: '/', maxAge: 0, secure: true, httpOnly: true, sameSite: 'Lax' });
   const redirect = c.req.query('redirect');
   if (redirect) return c.redirect(redirect);
@@ -107,17 +271,86 @@ app.get('/logout', async (c) => {
 
 // Check Active SSO Session
 app.get('/api/session', async (c) => {
-  const token = getCookie(c, 'sso_session');
-  if (!token) return c.json({ active: false }, 401);
-  try {
-    const payload = await verifyJWT(token, c.env.JWT_SECRET);
-    if (payload.uuid === 'admin') return c.json({ active: true, user: payload, token });
-    const user: any = await c.env.DB.prepare('SELECT status FROM users WHERE uuid = ?').bind(payload.uuid).first();
-    if (!user || user.status !== 'active') return c.json({ active: false }, 401);
-    return c.json({ active: true, user: payload, token });
-  } catch (e) {
-    return c.json({ active: false }, 401);
+  const activeSession = await authenticateCookieSession(c, true);
+  if (!activeSession) return c.json({ active: false }, 401);
+  return c.json({ active: true, user: activeSession.payload, token: activeSession.token });
+});
+
+app.get('/api/user/session', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  return c.json({
+    session_id: activeSession.payload.session_id,
+    uuid: activeSession.user.uuid,
+    username: activeSession.user.username,
+    name: activeSession.user.name,
+    exp: activeSession.payload.exp,
+    session: activeSession.session
+  });
+});
+
+app.post('/api/user/bind-token', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  const bindToken = await generateJWT({ action: 'bind', uuid: activeSession.user.uuid }, c.env.JWT_SECRET, 1 / 24);
+  return c.json({ success: true, bind_token: bindToken, uuid: activeSession.user.uuid });
+});
+
+app.post('/api/user/change-password', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  const { newPassword } = await c.req.json();
+  if (!newPassword || String(newPassword).trim().length < 1) {
+    return c.json({ error: 'New password is required' }, 400);
   }
+
+  const newSalt = generateSalt();
+  const newHash = await hashPassword(newPassword, newSalt);
+
+  await c.env.DB.prepare(
+    'UPDATE users SET password_hash = ?, password_salt = ?, password_plain = ? WHERE uuid = ?'
+  ).bind(newHash, newSalt, newPassword, activeSession.user.uuid).run();
+
+  return c.json({ success: true });
+});
+
+app.get('/api/user/sessions', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT session_id, login_at, ip_address, browser, device_type, app_id, expires_at, revoked_at
+    FROM user_sessions
+    WHERE uuid = ?
+    ORDER BY login_at DESC
+  `).bind(activeSession.user.uuid).all();
+
+  return c.json({
+    current_session_id: activeSession.payload.session_id,
+    sessions: results
+  });
+});
+
+app.delete('/api/user/sessions/:sessionId', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  const sessionId = c.req.param('sessionId');
+  const session: any = await c.env.DB.prepare(
+    'SELECT session_id FROM user_sessions WHERE session_id = ? AND uuid = ?'
+  ).bind(sessionId, activeSession.user.uuid).first();
+
+  if (!session) return c.json({ error: 'Session not found' }, 404);
+
+  await revokeSession(c, sessionId);
+  if (sessionId === activeSession.payload.session_id) {
+    setCookie(c, 'sso_session', '', { path: '/', maxAge: 0, secure: true, httpOnly: true, sameSite: 'Lax' });
+  }
+
+  return c.json({ success: true, revoked_current: sessionId === activeSession.payload.session_id });
 });
 
 // Verify Token & App Permission
@@ -249,19 +482,9 @@ app.post('/api/track', async (c) => {
     return c.json({ error: 'Missing required fields' }, 400);
   }
 
-  const country = c.req.raw.cf?.country || 'Unknown';
+  const country = (c.req.raw as any).cf?.country || 'Unknown';
   const userAgent = c.req.header('User-Agent') || '';
-
-  let deviceType = 'Desktop';
-  if (/Mobile|Android|iP(hone|od|ad)/i.test(userAgent)) {
-    deviceType = 'Mobile';
-  }
-
-  let browser = 'Other';
-  if (/Chrome/i.test(userAgent)) browser = 'Chrome';
-  else if (/Safari/i.test(userAgent)) browser = 'Safari';
-  else if (/Firefox/i.test(userAgent)) browser = 'Firefox';
-  else if (/Edge/i.test(userAgent)) browser = 'Edge';
+  const { deviceType, browser } = detectClientEnvironment(userAgent);
 
   // Write to Analytics Engine
   c.env.ANALYTICS.writeDataPoint({
@@ -437,8 +660,21 @@ app.get('/api/github/callback', async (c) => {
       username: userToAuth.username,
       status: userToAuth.status
     };
+    let tokenPayload: any = payload;
+    if (userToAuth.uuid !== 'admin') {
+      const sessionId = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + userToAuth.cookie_expiry_days * 86400 * 1000).toISOString();
+      await persistUserSession(
+        c,
+        userToAuth,
+        sessionId,
+        expiresAt,
+        statePayload.action === 'sso_login' ? statePayload.app_id : 'auth-center'
+      );
+      tokenPayload = { ...payload, session_id: sessionId };
+    }
 
-    const jwtToken = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+    const jwtToken = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
 
     if (statePayload.action === 'sso_login') {
       const appId = statePayload.app_id;
@@ -457,6 +693,8 @@ app.get('/api/github/callback', async (c) => {
         body: JSON.stringify({ app_id: appId, uuid: userToAuth.uuid, event_type: 'login_success', duration_seconds: 0 })
       }).catch(() => { });
 
+      setUserSessionCookie(c, jwtToken, userToAuth.cookie_expiry_days * 86400);
+
       return c.html(`
         <html><body>
           <script>
@@ -466,13 +704,7 @@ app.get('/api/github/callback', async (c) => {
       `);
     }
 
-    setCookie(c, 'sso_session', jwtToken, {
-      path: '/',
-      secure: true,
-      httpOnly: true,
-      sameSite: 'Lax',
-      maxAge: userToAuth.cookie_expiry_days * 86400
-    });
+    setUserSessionCookie(c, jwtToken, userToAuth.cookie_expiry_days * 86400);
 
     return c.html(`
       <html><body>
@@ -705,18 +937,22 @@ app.post('/api/passkey/verify-authentication', async (c) => {
         username: userToAuth.username,
         status: userToAuth.status
       };
+      let tokenPayload: any = payload;
+      if (userToAuth.uuid !== 'admin') {
+        const sessionId = crypto.randomUUID();
+        const expiresAt = new Date(Date.now() + userToAuth.cookie_expiry_days * 86400 * 1000).toISOString();
+        await persistUserSession(c, userToAuth, sessionId, expiresAt, appId || 'auth-center');
+        tokenPayload = { ...payload, session_id: sessionId };
+      }
 
-      const jwtToken = await generateJWT(payload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
+      const jwtToken = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
 
       if (appId && appRedirect) {
         setCookie(c, 'passkey_login_challenge', '', { maxAge: 0, path: '/' });
-        // Create the local admin token copy so that SSO does not logout admin if admin signs in via SSO to a client.
-        if (uuid === 'admin') {
-          setCookie(c, 'sso_session', jwtToken, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax', maxAge: userToAuth.cookie_expiry_days * 86400 });
-        }
+        setUserSessionCookie(c, jwtToken, userToAuth.cookie_expiry_days * 86400);
         return c.json({ verified: true, token: jwtToken });
       } else {
-        setCookie(c, 'sso_session', jwtToken, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax', maxAge: userToAuth.cookie_expiry_days * 86400 });
+        setUserSessionCookie(c, jwtToken, userToAuth.cookie_expiry_days * 86400);
         setCookie(c, 'passkey_login_challenge', '', { maxAge: 0, path: '/' });
         return c.json({ verified: true, token: jwtToken });
       }
@@ -960,7 +1196,7 @@ app.get('/admin/stats/usage', async (c) => {
       SUM(double1) AS total_value,
       COUNT() AS events
     FROM "auth-center"
-    WHERE timestamp >= now() - INTERVAL '30' DAY
+    WHERE timestamp >= now() - INTERVAL '7' DAY
       AND blob3 IN ('page_view', 'login_success', 'sso_auto_login')
     GROUP BY day, app_id, uuid, event_type, country, device, browser
     ORDER BY day ASC

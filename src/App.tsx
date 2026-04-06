@@ -7,8 +7,12 @@ import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
 import SsoBinding from './SsoBinding';
 import AppDetails from './AppDetails';
-import PasskeyManage from './PasskeyManage';
+import UserPasskeyManage from './UserPasskeyManage';
 import { startAuthentication } from '@simplewebauthn/browser';
+import { ThemeToggle, useThemeMode } from './theme';
+import UserLogin from './UserLogin';
+import UserHome from './UserHome';
+import SessionCenter from './SessionCenter';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
@@ -280,6 +284,7 @@ function WorldActivityMap({ countries, topCountry }: { countries: Array<{ name: 
 
 function Dashboard() {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
+  const { theme, setTheme } = useThemeMode('dark');
   const [isLogged, setIsLogged] = useState(false);
   const [authHeader, setAuthHeader] = useState('');
   const [adminName, setAdminName] = useState('');
@@ -615,176 +620,187 @@ function Dashboard() {
 
   if (ssoMode) {
     return (
-      <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4 overflow-hidden z-50">
-        <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none"></div>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="bg-black/40 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10 relative z-10"
-        >
-          <div className="flex justify-center mb-6">
-            <div className="p-4 bg-gradient-to-tr from-blue-600 to-purple-600 rounded-2xl shadow-lg shadow-purple-500/20">
-              <Shield className="w-10 h-10 text-white" />
-            </div>
+      <div data-theme={theme} className="dashboard-theme fixed inset-0 overflow-y-auto">
+        <div className="ui-auth-shell">
+          <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
+            <ThemeToggle theme={theme} onChange={setTheme} />
           </div>
-          <h2 className="text-3xl font-bold text-center text-white mb-2 tracking-tight">Single Sign-On</h2>
-          <p className="text-purple-300/80 text-center mb-8 font-medium">Continue to {ssoAppId}</p>
-
-          {ssoLoading ? (
-            <div className="flex justify-center py-6"><Activity className="w-8 h-8 text-purple-400 animate-spin" /></div>
-          ) : (
-            <form onSubmit={handleSsoLogin} className="space-y-4">
-              {ssoError && <div className="bg-red-500/20 text-red-300 p-3 rounded-xl border border-red-500/30 text-sm text-center">{ssoError}</div>}
-              <div>
-                <input
-                  type="text" required placeholder="User Account"
-                  className="w-full bg-white/5 border border-purple-500/30 text-purple-200 placeholder-purple-300/50 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-purple-500 transition-all duration-300 shadow-inner"
-                  value={credentials.username} onChange={e => setCredentials({ ...credentials, username: e.target.value })}
-                />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98, y: 18 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="ui-auth-card relative"
+          >
+            <div className="flex justify-center mb-6">
+              <div className="ui-logo-badge">
+                <Shield className="w-7 h-7" />
               </div>
-              <div>
-                <input
-                  type="password" required placeholder="Password"
-                  className="w-full bg-white/5 border border-purple-500/30 text-purple-200 placeholder-purple-300/50 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-purple-500 transition-all duration-300 shadow-inner"
-                  value={credentials.password} onChange={e => setCredentials({ ...credentials, password: e.target.value })}
-                />
-              </div>
-              <motion.button
-                whileHover={{ scale: 1.02, filter: 'brightness(1.1)' }}
-                whileTap={{ scale: 0.98 }}
-                className="w-full bg-gradient-to-r from-blue-600 via-purple-600 to-fuchsia-600 text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-purple-500/20 transition-all mt-4 border border-white/10"
-              >
-                Log In & Continue
-              </motion.button>
+            </div>
+            <div className="text-center mb-8">
+              <h2 className="text-[28px] leading-tight font-bold text-[var(--text-primary)]">Single Sign-On</h2>
+              <p className="text-sm text-[var(--text-secondary)] mt-2">Continue to {ssoAppId}</p>
+            </div>
 
-              <div className="flex items-center space-x-3 my-4 opacity-40">
-                <div className="flex-1 h-px bg-white"></div>
-                <span className="text-xs font-semibold uppercase tracking-widest">or</span>
-                <div className="flex-1 h-px bg-white"></div>
+            {ssoLoading ? (
+              <div className="flex justify-center py-8">
+                <Activity className="w-7 h-7 text-[var(--primary)] animate-spin" />
               </div>
+            ) : (
+              <form onSubmit={handleSsoLogin} className="space-y-4">
+                {ssoError && (
+                  <div className="rounded-[12px] border px-4 py-3 text-sm text-center" style={{ borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--border))', background: 'color-mix(in srgb, var(--danger) 10%, var(--surface))', color: 'var(--danger)' }}>
+                    {ssoError}
+                  </div>
+                )}
 
-              <motion.a
-                href={`${API_BASE}/api/github/login?app_redirect=${encodeURIComponent(ssoRedirect)}&app_id=${ssoAppId}`}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className="w-full flex items-center justify-center gap-3 bg-[#171515] hover:bg-[#201e1e] text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-black/20 transition-all border border-white/10"
-              >
-                <Github className="w-6 h-6" />
-                Continue with Github
-              </motion.a>
-              <motion.button
-                type="button"
-                onClick={handlePasskeyLogin}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className="w-full flex items-center justify-center gap-3 bg-[#0f172a] hover:bg-[#1e293b] text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg transition-all border border-indigo-500/30"
-              >
-                <KeyRound className="w-6 h-6 text-indigo-400" />
-                Continue with Passkey
-              </motion.button>
-            </form>
-          )}
-        </motion.div>
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Account</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="User account"
+                    value={credentials.username}
+                    onChange={e => setCredentials({ ...credentials, username: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Password</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Password"
+                    value={credentials.password}
+                    onChange={e => setCredentials({ ...credentials, password: e.target.value })}
+                  />
+                </div>
+
+                <motion.button whileHover={{ y: -1 }} whileTap={{ scale: 0.99 }} className="ui-button-primary w-full">
+                  Log In & Continue
+                </motion.button>
+
+                <div className="flex items-center gap-3 py-2">
+                  <div className="h-px flex-1 bg-[var(--divider)]"></div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Other options</span>
+                  <div className="h-px flex-1 bg-[var(--divider)]"></div>
+                </div>
+
+                <motion.a
+                  href={`${API_BASE}/api/github/login?app_redirect=${encodeURIComponent(ssoRedirect)}&app_id=${ssoAppId}`}
+                  whileHover={{ y: -1 }}
+                  whileTap={{ scale: 0.99 }}
+                  className="ui-button-secondary w-full flex items-center justify-center gap-3 no-underline"
+                >
+                  <Github className="w-5 h-5" />
+                  Continue with GitHub
+                </motion.a>
+                <motion.button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  whileHover={{ y: -1 }}
+                  whileTap={{ scale: 0.99 }}
+                  className="ui-button-secondary w-full flex items-center justify-center gap-3"
+                >
+                  <KeyRound className="w-5 h-5 text-[var(--primary)]" />
+                  Continue with Passkey
+                </motion.button>
+              </form>
+            )}
+          </motion.div>
+        </div>
       </div>
     );
   }
 
   if (!isLogged) {
     return (
-      <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-fuchsia-900 to-indigo-950 flex items-center justify-center p-4 overflow-hidden z-50">
-        <div className="absolute inset-0 bg-black/40 z-0 pointer-events-none"></div>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="bg-black/20 backdrop-blur-xl border border-purple-400/30 p-8 rounded-3xl shadow-2xl shadow-purple-900/50 w-full max-w-md ring-1 ring-white/10 relative z-10"
-        >
-          <div className="flex justify-center mb-6">
-            <div className="p-4 bg-gradient-to-tr from-purple-600 to-emerald-600 rounded-2xl shadow-lg shadow-emerald-500/20">
-              <Shield className="w-10 h-10 text-white" />
-            </div>
+      <div data-theme={theme} className="dashboard-theme fixed inset-0 overflow-y-auto">
+        <div className="ui-auth-shell">
+          <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
+            <ThemeToggle theme={theme} onChange={setTheme} />
           </div>
-          <h2 className="text-3xl font-bold text-center text-white mb-2 tracking-tight">SSO Admin</h2>
-          <p className="text-purple-300/80 text-center mb-8 font-medium">Authentication required</p>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98, y: 18 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="ui-auth-card relative"
+          >
+            <div className="flex justify-center mb-6">
+              <div className="ui-logo-badge">
+                <Shield className="w-7 h-7" />
+              </div>
+            </div>
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-1 text-[12px] font-semibold text-[var(--text-secondary)]">
+                <Activity className="w-3.5 h-3.5 text-[var(--primary)]" />
+                Unified auth and analytics
+              </div>
+              <h2 className="text-[28px] leading-tight font-bold text-[var(--text-primary)] mt-4">Auth Center Admin</h2>
+              <p className="text-sm text-[var(--text-secondary)] mt-2">Minimal enterprise sign-in for managing apps, users, and access analytics.</p>
+            </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <input
-                type="text" required placeholder="Username"
-                className="w-full bg-white/5 border border-purple-500/30 text-emerald-300 placeholder-purple-300/40 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-emerald-500 transition-all duration-300 shadow-inner"
-                value={credentials.username} onChange={e => setCredentials({ ...credentials, username: e.target.value })}
-              />
-            </div>
-            <div>
-              <input
-                type="password" required placeholder="Password"
-                className="w-full bg-white/5 border border-purple-500/30 text-emerald-300 placeholder-purple-300/40 font-medium rounded-xl px-4 py-3 outline-none focus:bg-white/10 focus:ring-2 focus:border-transparent focus:ring-emerald-500 transition-all duration-300 shadow-inner"
-                value={credentials.password} onChange={e => setCredentials({ ...credentials, password: e.target.value })}
-              />
-            </div>
-            <motion.button
-              whileHover={{ scale: 1.02, filter: 'brightness(1.1)' }}
-              whileTap={{ scale: 0.98 }}
-              className="w-full bg-gradient-to-r from-purple-600 via-blue-600 to-emerald-600 text-white font-bold text-lg rounded-xl px-4 py-3 shadow-lg shadow-emerald-500/20 transition-all mt-4 border border-white/10"
-            >
-              Secure Login
-            </motion.button>
-          </form>
-        </motion.div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Username</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Admin username"
+                  value={credentials.username}
+                  onChange={e => setCredentials({ ...credentials, username: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Password"
+                  value={credentials.password}
+                  onChange={e => setCredentials({ ...credentials, password: e.target.value })}
+                />
+              </div>
+
+              <motion.button whileHover={{ y: -1 }} whileTap={{ scale: 0.99 }} className="ui-button-primary w-full mt-2">
+                Secure Login
+              </motion.button>
+            </form>
+
+            <Link to="/users/" className="ui-button-secondary mt-6 inline-flex w-full items-center justify-center gap-2 no-underline">
+              Users Here
+            </Link>
+          </motion.div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-[#0B0F19] text-white flex flex-col md:flex-row shadow-[0_0_0_100vmax_#0B0F19]">
-      {/* Dynamic Background Elements */}
-      <div className="absolute top-0 left-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-600/20 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute top-[20%] right-[20%] w-[30%] h-[30%] bg-blue-600/20 rounded-full blur-[100px] pointer-events-none" />
-
-      {/* Sidebar */}
+    <div data-theme={theme} className="dashboard-theme fixed inset-0 overflow-hidden flex flex-col md:flex-row">
       <motion.aside
         initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-        className="w-full md:w-72 bg-white/5 backdrop-blur-3xl border-b md:border-b-0 md:border-r border-white/10 flex flex-col z-10 relative flex-shrink-0"
+        className="ui-shell-sidebar w-full md:w-[280px] border-b md:border-b-0 md:border-r flex flex-col z-10 relative flex-shrink-0"
       >
-        <div className="p-4 md:p-8 md:pb-4">
-          <div className="flex items-center justify-between gap-3">
+        <div className="p-4 md:p-6">
+          <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl shadow-lg shadow-purple-500/20">
-                <Activity className="w-6 h-6 text-white" />
+              <div className="ui-logo-badge">
+                <Activity className="w-5 h-5" />
               </div>
-              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-200">
-                Auth Center
-              </span>
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-primary)]">Auth Center</p>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">Unified identity workspace</p>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Link
-                to={`/admin/passkey`}
-                className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
-                title="Manage Passkeys for Admin"
-              >
-                <KeyRound className="w-5 h-5 text-indigo-400" />
-              </Link>
-              <motion.a
-                href={`${API_BASE}/api/github/login?admin_bind=admin`}
-                target="_blank" rel="noreferrer"
-                className="p-2 hover:bg-white/10 text-white/50 hover:text-white rounded-xl transition-colors"
-                title="Bind GitHub for Admin"
-              >
-                <Github className="w-5 h-5" />
-              </motion.a>
-              <motion.button onClick={handleLogout} className="md:hidden text-red-400 p-2 hover:bg-red-500/20 rounded-xl" title="Sign Out">
-                <LogOut className="w-5 h-5" />
-              </motion.button>
-            </div>
+            <motion.button onClick={handleLogout} className="ui-icon-button md:hidden" title="Sign Out">
+              <LogOut className="w-4 h-4" />
+            </motion.button>
           </div>
           {adminName && (
             <motion.div
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="mt-4 px-1"
+              className="ui-card-subtle mt-5 p-4"
             >
-              <p className="text-xs text-white/40 font-medium uppercase tracking-widest mb-0.5">Welcome back</p>
+              <p className="text-xs text-[var(--text-tertiary)] font-semibold uppercase tracking-[0.18em] mb-2">Signed in</p>
               <p className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-300 to-blue-300">
                 Hi, {adminName} 👋
               </p>
@@ -792,7 +808,7 @@ function Dashboard() {
           )}
         </div>
 
-        <nav className="flex md:flex-col overflow-x-auto px-4 pb-2 md:mt-8 space-x-2 md:space-x-0 md:space-y-2 w-full no-scrollbar">
+        <nav className="flex md:flex-col overflow-x-auto px-4 pb-2 md:pb-4 md:space-y-2 w-full no-scrollbar">
           {[
             { id: 'users', icon: Users, label: 'Users' },
             { id: 'apps', icon: LayoutGrid, label: 'Applications' },
@@ -801,15 +817,12 @@ function Dashboard() {
           ].map(tab => (
             <motion.button
               key={tab.id}
-              whileHover={{ x: 4, backgroundColor: 'rgba(255,255,255,0.1)' }}
+              data-active={activeTab === tab.id}
               whileTap={{ scale: 0.98 }}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex-shrink-0 flex items-center gap-2 md:gap-3 px-4 py-2.5 md:py-3.5 rounded-2xl transition-all duration-300 font-medium ${activeTab === tab.id
-                ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-purple-200 border border-purple-500/30 shadow-[0_0_20px_rgba(168,85,247,0.15)]'
-                : 'text-gray-400 hover:text-white border border-transparent'
-                }`}
+              className="ui-nav-pill flex-shrink-0 flex items-center gap-2 md:gap-3 px-4 py-2.5 md:py-3 font-medium transition-all duration-300"
             >
-              <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'text-purple-400' : ''}`} />
+              <tab.icon className="w-5 h-5" />
               <span className="whitespace-nowrap">{tab.label}</span>
             </motion.button>
           ))}
@@ -817,18 +830,45 @@ function Dashboard() {
 
         <div className="hidden md:block p-4 mt-auto mb-4">
           <motion.button
-            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }}
+            whileHover={{ y: -1 }} whileTap={{ scale: 0.98 }}
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-red-400 hover:text-white hover:bg-red-500/20 transition-all border border-transparent hover:border-red-500/30"
+            className="ui-button-secondary w-full flex items-center gap-3 justify-start"
           >
-            <LogOut className="w-5 h-5" />
+            <LogOut className="w-5 h-5 text-[var(--danger)]" />
             Sign Out
           </motion.button>
         </div>
       </motion.aside>
 
-      {/* Main Content */}
-      <main className="flex-1 p-4 md:p-8 lg:p-12 overflow-y-auto overflow-x-hidden z-10 relative">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden z-10 relative bg-[var(--bg)]">
+        <div className="max-w-7xl mx-auto p-4 md:p-8 lg:p-10">
+          <div className="ui-page-header mb-8 p-5 md:p-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)] mb-2">Admin Workspace</p>
+              <h1 className="text-2xl md:text-3xl font-bold text-[var(--text-primary)]">Manage authentication, apps, and usage</h1>
+              <p className="text-sm md:text-base text-[var(--text-secondary)] mt-2">A cleaner, token-driven dashboard with consistent cards, light and dark modes, and the same underlying product logic.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <ThemeToggle theme={theme} onChange={setTheme} />
+              <Link
+                to={`/admin/passkey`}
+                className="ui-button-secondary inline-flex items-center gap-2 no-underline"
+                title="Manage Passkeys for Admin"
+              >
+                <KeyRound className="w-4 h-4 text-[var(--primary)]" />
+                Passkeys
+              </Link>
+              <motion.a
+                href={`${API_BASE}/api/github/login?admin_bind=admin`}
+                target="_blank" rel="noreferrer"
+                className="ui-button-secondary inline-flex items-center gap-2 no-underline"
+                title="Bind GitHub for Admin"
+              >
+                <Github className="w-4 h-4" />
+                GitHub Bind
+              </motion.a>
+            </div>
+          </div>
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -1095,15 +1135,15 @@ function Dashboard() {
               })).sort((a: any, b: any) => a.day.localeCompare(b.day));
 
               // 3. Category Data for Pie/Bar Charts
-              const getBreakdown = (key: string, limit = 5) => {
-                const map: any = {};
+              const getBreakdown = (key: string, limit = 5): Array<{ name: string; value: number }> => {
+                const map: Record<string, number> = {};
                 data.forEach((c: any) => {
                   const val = c[key] || 'Unknown';
                   map[val] = (map[val] || 0) + (c.events || 0);
                 });
                 return Object.entries(map)
-                  .map(([name, value]) => ({ name, value }))
-                  .sort((a, b: any) => (b.value as number) - (a.value as number))
+                  .map(([name, value]) => ({ name, value: Number(value) || 0 }))
+                  .sort((a, b) => b.value - a.value)
                   .slice(0, limit);
               };
 
@@ -1127,9 +1167,9 @@ function Dashboard() {
                         <BarChart3 className="text-purple-400 w-8 h-8" />
                         System Analytics
                       </h1>
-                      <p className="text-white/50 text-lg">Real-time access analytics overview of your Auth ecosystem.</p>
+                      <p className="text-white/50 text-lg">Access analytics for the last 7 days across your Auth ecosystem.</p>
                       <p className="text-white/30 text-sm mt-3">
-                        Metrics below are aggregated from access events only: <span className="text-white/55">page_view</span>, <span className="text-white/55">login_success</span>, and <span className="text-white/55">sso_auto_login</span>. Quota writes are excluded.
+                        Metrics below cover only the last 7 days and are aggregated from access events only: <span className="text-white/55">page_view</span>, <span className="text-white/55">login_success</span>, and <span className="text-white/55">sso_auto_login</span>. Quota writes are excluded.
                       </p>
                       <div className="flex flex-wrap gap-2 mt-4">
                         {eventTypeData.map((event: any) => (
@@ -1283,7 +1323,7 @@ function Dashboard() {
 
                   {/* JSON Footer for debugging */}
                   <details className="mt-12 text-white/10 text-xs">
-                    <summary className="cursor-pointer hover:text-white/30 transition-colors">Raw Analytics Payload (access events only)</summary>
+                    <summary className="cursor-pointer hover:text-white/30 transition-colors">Raw Analytics Payload (last 7 days, access events only)</summary>
                     <pre className="p-4 bg-black/40 rounded-3xl border border-white/5 mt-4 overflow-auto max-h-64">
                       {JSON.stringify(rawData, null, 2)}
                     </pre>
@@ -1293,6 +1333,7 @@ function Dashboard() {
             })()}
           </motion.div>
         </AnimatePresence>
+        </div>
 
         {quotaModal && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -1363,9 +1404,12 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="/users/*" element={<UserLogin />} />
+      <Route path="/session" element={<SessionCenter />} />
       <Route path="/:uuid/change-password" element={<ChangePassword />} />
       <Route path="/:uuid/sso-binding" element={<SsoBinding />} />
-      <Route path="/:uuid/passkey" element={<PasskeyManage />} />
+      <Route path="/:uuid/passkey" element={<UserPasskeyManage />} />
+      <Route path="/:uuid" element={<UserHome />} />
       <Route path="/app/:appId" element={<AppDetails />} />
       <Route path="/*" element={<Dashboard />} />
     </Routes>
