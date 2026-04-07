@@ -741,7 +741,9 @@ app.post('/api/passkey/generate-registration-options', async (c) => {
     }));
 
     let username = uuid;
-    if (uuid !== 'admin') {
+    if (uuid === 'admin') {
+      username = c.env.ADMIN_USERNAME;
+    } else {
       const user: any = await c.env.DB.prepare('SELECT username FROM users WHERE uuid = ?').bind(uuid).first();
       if (user) username = user.username;
     }
@@ -983,6 +985,11 @@ app.use('/admin/*', async (c, next) => {
     password: c.env.ADMIN_PASSWORD,
   });
   return auth(c, next);
+});
+
+app.post('/admin/bind-token', async (c) => {
+  const bindToken = await generateJWT({ action: 'bind', uuid: 'admin' }, c.env.JWT_SECRET, 1 / 24);
+  return c.json({ success: true, bind_token: bindToken });
 });
 
 // Users CRUD

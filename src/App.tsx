@@ -7,6 +7,7 @@ import UserProfile from './UserProfile';
 import ChangePassword from './ChangePassword';
 import SsoBinding from './SsoBinding';
 import AppDetails from './AppDetails';
+import AdminPasskeyManage from './AdminPasskeyManage';
 import UserPasskeyManage from './UserPasskeyManage';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { ThemeToggle, useThemeMode } from './theme';
@@ -29,65 +30,6 @@ const ACCESS_EVENT_TYPES = new Set(['page_view', 'login_success', 'sso_auto_logi
 const REGION_LABELS = typeof Intl !== 'undefined' && 'DisplayNames' in Intl
   ? new Intl.DisplayNames(['en'], { type: 'region' })
   : null;
-
-const WORLD_LANDMASSES = [
-  'M45 145L54 120L68 101L85 88L101 72L118 63L138 55L160 53L181 57L199 67L214 78L226 94L228 109L223 118L211 121L198 116L182 115L168 122L158 136L144 146L126 157L110 168L92 179L79 187L67 186L57 173L49 157L45 145Z',
-  'M209 46L224 37L244 35L263 39L279 49L285 64L280 78L266 84L248 83L229 75L214 60L209 46Z',
-  'M198 208L214 206L230 213L245 226L255 243L263 263L265 286L262 310L255 334L244 353L232 363L221 358L216 338L214 316L208 296L201 275L193 255L191 235L194 220L198 208Z',
-  'M356 103L367 96L381 92L396 92L410 97L423 105L432 115L434 125L427 132L414 131L402 134L392 141L379 143L366 138L357 128L353 116L356 103Z',
-  'M382 151L395 146L410 147L424 154L435 167L442 183L445 201L443 221L438 242L430 262L420 281L408 292L397 289L391 273L389 252L386 231L380 212L374 193L372 176L375 162L382 151Z',
-  'M430 93L451 82L476 75L508 71L543 71L577 75L611 83L642 95L666 108L679 122L678 135L667 147L648 152L629 158L611 167L596 181L586 196L574 204L560 208L546 205L534 196L524 183L516 170L504 160L489 154L471 149L454 141L441 128L433 113L430 93Z',
-  'M506 166L520 166L536 173L548 185L554 200L554 214L548 227L540 239L536 253L540 267L552 276L569 276L584 270L598 262L612 257L625 260L634 269L638 282L634 291L622 295L607 294L592 290L578 284L566 275L554 263L543 248L531 233L520 219L511 202L506 184L506 166Z',
-  'M683 145L692 142L700 148L703 158L700 168L692 175L685 170L682 158L683 145Z',
-  'M603 288L619 282L638 280L659 281L678 287L694 297L703 310L702 324L691 334L671 340L649 340L628 334L612 324L603 311L601 298L603 288Z',
-  'M446 293L453 297L456 308L454 320L447 328L442 318L443 305L446 293Z',
-];
-
-const COUNTRY_COORDINATES: Record<string, { x: number; y: number }> = {
-  AR: { x: 249, y: 326 },
-  AU: { x: 680, y: 317 },
-  BD: { x: 579, y: 205 },
-  BE: { x: 403, y: 121 },
-  BR: { x: 247, y: 269 },
-  CA: { x: 149, y: 92 },
-  CH: { x: 413, y: 133 },
-  CL: { x: 230, y: 315 },
-  CN: { x: 619, y: 164 },
-  CO: { x: 206, y: 232 },
-  DE: { x: 415, y: 118 },
-  EG: { x: 445, y: 181 },
-  ES: { x: 389, y: 149 },
-  FR: { x: 399, y: 131 },
-  GB: { x: 388, y: 105 },
-  HK: { x: 631, y: 184 },
-  ID: { x: 630, y: 268 },
-  IE: { x: 377, y: 108 },
-  IN: { x: 558, y: 199 },
-  IT: { x: 421, y: 147 },
-  JP: { x: 691, y: 158 },
-  KR: { x: 659, y: 149 },
-  MX: { x: 144, y: 170 },
-  MY: { x: 594, y: 247 },
-  NG: { x: 420, y: 226 },
-  NL: { x: 405, y: 116 },
-  NO: { x: 419, y: 81 },
-  NZ: { x: 747, y: 344 },
-  PH: { x: 646, y: 223 },
-  PK: { x: 532, y: 181 },
-  PL: { x: 432, y: 119 },
-  PT: { x: 378, y: 150 },
-  RU: { x: 509, y: 82 },
-  SA: { x: 486, y: 188 },
-  SE: { x: 431, y: 84 },
-  SG: { x: 601, y: 252 },
-  TH: { x: 591, y: 223 },
-  TR: { x: 462, y: 151 },
-  TW: { x: 648, y: 182 },
-  UA: { x: 452, y: 125 },
-  US: { x: 167, y: 137 },
-  VN: { x: 608, y: 217 },
-  ZA: { x: 453, y: 327 },
-};
 
 function roundToTwo(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -144,32 +86,17 @@ function getRegionLabel(code: string) {
   }
 }
 
-function WorldActivityMap({ countries, topCountry }: { countries: Array<{ name: string; value: number }>; topCountry: string }) {
-  const mappedCountries = countries
-    .map((country) => {
-      const code = String(country.name || '').toUpperCase();
-      const coordinates = COUNTRY_COORDINATES[code];
-      return {
-        ...country,
-        code,
-        label: getRegionLabel(code),
-        coordinates,
-      };
-    })
-    .filter((country) => country.coordinates)
-    .slice(0, 12);
-
-  const hiddenCountries = countries
-    .map((country) => {
-      const code = String(country.name || '').toUpperCase();
-      return {
-        ...country,
-        code,
-        label: getRegionLabel(code),
-      };
-    })
-    .filter((country) => !COUNTRY_COORDINATES[country.code])
-    .slice(0, 6);
+function CountrySharePanel({ countries, topCountry, totalEvents }: { countries: Array<{ name: string; value: number }>; topCountry: string; totalEvents: number }) {
+  const countryRows = countries.map((country) => {
+    const code = String(country.name || '').toUpperCase();
+    const percent = totalEvents > 0 ? (country.value / totalEvents) * 100 : 0;
+    return {
+      ...country,
+      code,
+      label: getRegionLabel(code),
+      percent,
+    };
+  });
 
   return (
     <div className="bg-white/5 border border-white/10 rounded-[2.5rem] p-8 backdrop-blur-sm">
@@ -177,107 +104,51 @@ function WorldActivityMap({ countries, topCountry }: { countries: Array<{ name: 
         <div>
           <h3 className="text-xl font-bold text-white flex items-center gap-2">
             <Globe className="text-cyan-300 w-5 h-5" />
-            Global Visitor Map
+            Visitor Regions
           </h3>
           <p className="text-sm text-white/45 mt-2">
-            Coastline-level world silhouette with highlighted active visitor regions, led by {getRegionLabel(topCountry)}.
+            Country-level request proportions for the last 7 days, led by {getRegionLabel(topCountry)}.
           </p>
         </div>
         <div className="text-sm text-white/35">
-          Highlighting the top {mappedCountries.length || countries.length} active regions from the last 30 days.
+          Top {countryRows.length} countries by access-event share.
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(260px,0.9fr)] gap-6">
-        <div className="rounded-[2rem] border border-white/10 bg-[#07111f] overflow-hidden">
-          <svg viewBox="0 0 800 400" className="w-full h-full min-h-[300px]">
-            <defs>
-              <linearGradient id="worldMapBg" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#081325" />
-                <stop offset="100%" stopColor="#0f1f35" />
-              </linearGradient>
-              <radialGradient id="worldGlow" cx="50%" cy="45%" r="65%">
-                <stop offset="0%" stopColor="rgba(56,189,248,0.18)" />
-                <stop offset="100%" stopColor="rgba(56,189,248,0)" />
-              </radialGradient>
-            </defs>
-
-            <rect width="800" height="400" fill="url(#worldMapBg)" />
-            <rect width="800" height="400" fill="url(#worldGlow)" />
-
-            {WORLD_LANDMASSES.map((path, index) => (
-              <path
-                key={index}
-                d={path}
-                fill="rgba(148, 163, 184, 0.16)"
-                stroke="rgba(148, 163, 184, 0.34)"
-                strokeWidth="2.2"
-                strokeLinejoin="round"
-              />
-            ))}
-
-            {mappedCountries.map((country, index) => {
-              const radius = 8 + Math.min(12, Math.log10(country.value + 1) * 5);
-              return (
-                <g key={country.code}>
-                  <circle
-                    cx={country.coordinates!.x}
-                    cy={country.coordinates!.y}
-                    r={radius + 10}
-                    fill="rgba(34, 211, 238, 0.10)"
-                  />
-                  <circle
-                    cx={country.coordinates!.x}
-                    cy={country.coordinates!.y}
-                    r={radius + 4}
-                    fill="rgba(34, 211, 238, 0.18)"
-                  />
-                  <circle
-                    cx={country.coordinates!.x}
-                    cy={country.coordinates!.y}
-                    r={radius}
-                    fill={index === 0 ? '#f59e0b' : '#22d3ee'}
-                    stroke="rgba(255,255,255,0.85)"
-                    strokeWidth="2"
-                  />
-                </g>
-              );
-            })}
-          </svg>
+      {countryRows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-4 py-6 text-sm text-white/40">
+          No country-level visitor data is available yet.
         </div>
-
-        <div className="space-y-3">
-          {mappedCountries.length ? mappedCountries.map((country, index) => (
-            <div key={country.code} className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex w-2.5 h-2.5 rounded-full ${index === 0 ? 'bg-amber-400' : 'bg-cyan-400'}`}></span>
-                  <span className="text-white font-medium truncate">{country.label}</span>
+      ) : (
+        <div className="space-y-4">
+          {countryRows.map((country, index) => (
+            <div key={`${country.code}-${index}`} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex w-2.5 h-2.5 rounded-full ${index === 0 ? 'bg-amber-400' : 'bg-cyan-400'}`}></span>
+                    <span className="text-white font-medium truncate">{country.label}</span>
+                    <span className="text-xs text-white/35">{country.code}</span>
+                  </div>
+                  <p className="text-xs text-white/35 mt-1">
+                    {formatCompactNumber(country.value)} requests
+                  </p>
                 </div>
-                <p className="text-xs text-white/35 mt-1">{country.code}</p>
+                <div className="text-right">
+                  <p className="text-sm font-mono text-white/85">{formatPercent(country.percent)}</p>
+                  <p className="text-xs text-white/35">of total visits</p>
+                </div>
               </div>
-              <span className="text-sm font-mono text-white/80">{formatCompactNumber(country.value)}</span>
-            </div>
-          )) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-4 py-6 text-sm text-white/40">
-              No region-level visitor data is available yet.
-            </div>
-          )}
-
-          {hiddenCountries.length > 0 && (
-            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-white/30 mb-3">Additional Active Regions</p>
-              <div className="flex flex-wrap gap-2">
-                {hiddenCountries.map((country) => (
-                  <span key={country.code} className="px-3 py-1.5 rounded-full bg-white/5 text-xs text-white/60 border border-white/10">
-                    {country.label} · {formatCompactNumber(country.value)}
-                  </span>
-                ))}
+              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white/5">
+                <div
+                  className={`h-full rounded-full ${index === 0 ? 'bg-amber-400' : 'bg-cyan-400'}`}
+                  style={{ width: `${Math.min(100, Math.max(country.percent, 2))}%` }}
+                ></div>
               </div>
             </div>
-          )}
+          ))}
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1105,6 +976,7 @@ function Dashboard() {
               // 1. KPI Aggregations
               const totalEvents = data.reduce((acc: number, c: any) => acc + (c.events || 0), 0);
               const uniqueUsers = new Set(data.map((c: any) => c.uuid)).size;
+              const totalVisitsDisplay = formatCompactNumber(totalEvents);
 
               const getTop = (key: string) => {
                 const map: any = {};
@@ -1148,8 +1020,7 @@ function Dashboard() {
               };
 
               const browsersData = getBreakdown('browser');
-              const countriesData = getBreakdown('country');
-              const mapCountriesData = getBreakdown('country', 12);
+              const countriesData = getBreakdown('country', 10);
               const eventTypeData = getBreakdown('event_type', 3);
               const appsData = getBreakdown('app_id').map(item => ({
                 ...item,
@@ -1189,7 +1060,7 @@ function Dashboard() {
                   {/* KPI Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     {[
-                      { label: 'Total Visits', value: totalEvents, sub: 'Access events counted', icon: Activity, color: 'blue' },
+                      { label: 'Total Visits', value: totalVisitsDisplay, sub: 'Access events counted, compacted to K/M/G', icon: Activity, color: 'blue' },
                       { label: 'Unique Visitors', value: uniqueUsers, sub: 'Distinct user IDs', icon: Users, color: 'purple' },
                       { label: 'Top Browser', value: topBrowser, sub: 'Preferred environment', icon: Globe, color: 'emerald' },
                       { label: 'Hot Application', value: topApp, sub: 'Most active access source', icon: Zap, color: 'amber' },
@@ -1319,7 +1190,7 @@ function Dashboard() {
                     </div>
                   </div>
 
-                  <WorldActivityMap countries={mapCountriesData} topCountry={topCountry} />
+                  <CountrySharePanel countries={countriesData} topCountry={topCountry} totalEvents={totalEvents} />
 
                   {/* JSON Footer for debugging */}
                   <details className="mt-12 text-white/10 text-xs">
@@ -1404,6 +1275,7 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="/admin/passkey" element={<AdminPasskeyManage />} />
       <Route path="/users/*" element={<UserLogin />} />
       <Route path="/session" element={<SessionCenter />} />
       <Route path="/:uuid/change-password" element={<ChangePassword />} />

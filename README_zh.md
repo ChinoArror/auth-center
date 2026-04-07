@@ -1,278 +1,549 @@
-# SSO & Analytics System (Cloudflare Workers)
+# Auth Center 统一 SSO 与统计系统
 
-这是一个基于 Cloudflare Workers 构建的统一单点登录 (SSO) 和分析系统。它为多个 Web 应用提供集中的身份验证和使用情况跟踪。
+Auth Center 是一个基于 Cloudflare Workers 构建的统一身份认证、会话管理与访问统计平台，适合为多个子应用提供集中式登录中心。
 
-- **灵活集成**：支持简单重定向或标准 SSO 流程，轻松上手。
-- **Agent 用量限制**：（新增！）为基于大模型的 Agent 配置 Token 和请求限额。
-- **可视化数据分析**：（新增！）集成 Cloudflare Analytics Engine SQL API，提供基于访问事件的实时流量、浏览器、地理位置分布仪表盘。
-- **海岸线世界地图**：（新增！）统计页内置海岸线级别的世界地图高亮，以及便于排查统计口径的 Raw Analytics Payload 调试面板。
-- **安全至上**：100% 构建在 Cloudflare 技术栈之上（D1 数据库，Workers 逻辑层）。
-- **GitHub SSO 集成**：支持绑定 GitHub 身份，实现一键安全登录。
+它当前已经具备以下能力：
 
-## 必备条件
+- 统一账号密码登录
+- 多应用 SSO 跳转与令牌校验
+- GitHub 绑定与 GitHub 登录
+- Passkey 注册与 Passkey 登录
+- 管理员后台
+- 用户自助中心
+- 登录会话查看与一键关闭
+- 最近 7 天访问统计
+- 浅色模式与暗黑模式
 
-- 安装 [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-- Cloudflare 账号
+## 一、项目定位
 
-## 1. 初始化说明
+这个项目的目标不是只做一个登录页，而是提供一个完整的认证中心：
 
-### 创建 D1 数据库
-首先，创建一个新的 D1 数据库：
+- 对管理员来说，可以管理用户、应用、权限、配额和统计
+- 对普通用户来说，可以登录后自助完成绑定 GitHub、绑定通行密钥、修改密码、查看登录会话
+- 对子应用来说，可以把登录、权限校验、配额限制、访问事件统计全部接入到同一个中心
+
+## 二、当前主要功能
+
+### 1. 认证能力
+
+- 用户名 + 密码登录
+- GitHub OAuth 登录与绑定
+- Passkey 注册与登录
+- 基于 JWT 的子应用校验
+- 管理员独立登录
+
+### 2. 会话能力
+
+- 用户浏览器使用 Cookie 会话
+- 所有用户登录会话写入 D1 的 `user_sessions` 表
+- 用户可以查看自己的登录会话
+- 用户可以关闭任意会话
+- 关闭当前会话后会立即退出登录
+
+### 3. 管理后台能力
+
+- 用户管理
+- 应用管理
+- 用户-应用权限分配
+- 配额与限额管理
+- 管理员 GitHub 绑定
+- 管理员 Passkey 管理
+
+### 4. 统计能力
+
+- 基于 Cloudflare Analytics Engine 的访问统计
+- `Statistics` 页面只统计最近 7 天
+- 只统计访问类事件，不统计配额消耗类内部事件
+- 大数字自动显示为 `K`、`M`、`G` 等单位
+- 所有统计数字统一四舍五入保留两位小数
+- 国家请求占比展示
+- 保留 Raw Analytics Payload 调试面板
+
+## 三、技术架构
+
+### 后端
+
+- Cloudflare Workers
+- Hono 路由
+- D1 数据库
+- Analytics Engine 数据集
+
+### 前端
+
+- React
+- Vite
+- Lucide React 图标
+- Recharts 图表
+- 基于设计 Token 的浅色 / 暗黑主题系统
+
+### 关键文件
+
+- `src/index.ts`
+  - Worker 主入口
+  - 登录、GitHub、Passkey、统计、管理接口
+- `src/App.tsx`
+  - 管理后台主界面
+  - 统计页
+  - 路由入口
+- `src/UserLogin.tsx`
+  - 用户登录页
+- `src/UserHome.tsx`
+  - 用户账户中心首页
+- `src/SessionCenter.tsx`
+  - 登录会话中心
+- `src/ChangePassword.tsx`
+  - 用户修改密码页
+- `src/SsoBinding.tsx`
+  - 用户 GitHub 绑定页
+- `src/UserPasskeyManage.tsx`
+  - 用户通行密钥管理页
+- `src/AdminPasskeyManage.tsx`
+  - 管理员通行密钥管理页
+- `src/theme.tsx`
+  - 主题切换逻辑
+- `src/index.css`
+  - 设计 Token 与主题样式
+- `schema.sql`
+  - 全量表结构
+- `migrate-user-sessions.sql`
+  - 用户会话表迁移脚本
+
+## 四、数据结构说明
+
+### 主要表
+
+- `users`
+  - 用户账号信息
+  - 密码 hash / salt
+  - GitHub 绑定
+  - Cookie 过期天数
+- `apps`
+  - 子应用信息
+  - 回调地址
+  - 应用 secret
+- `user_apps`
+  - 用户与应用的权限映射
+  - 请求配额与 token 配额
+- `passkeys`
+  - 用户或管理员的 WebAuthn 凭据
+- `user_sessions`
+  - 用户登录会话
+  - 登录时间、IP、浏览器、设备、来源 app、过期时间、撤销时间
+
+### 统计数据集
+
+Analytics Engine 数据集名为 `auth-center`，统计页通过 SQL API 聚合查询数据。
+
+## 五、部署步骤
+
+### 1. 安装依赖
+
 ```bash
-npx wrangler d1 create auth-center-db
+npm install
 ```
-并将生成的 `database_id` 更新到项目根目录的 `wrangler.toml` 文件中。
 
-### 写入数据库表结构
-运行下面命令进行表结构初始化（请确保你位于项目根目录）：
+### 2. 配置 `wrangler.toml`
+
+至少需要确认以下配置：
+
+- Worker 名称
+- 自定义域名 route
+- D1 绑定
+- Analytics Engine 绑定
+- 管理员账号密码
+- JWT_SECRET
+- GitHub OAuth 配置
+- Cloudflare 账号 ID
+- Cloudflare API Token
+
+### 3. 初始化数据库
+
+新环境建议直接执行完整 schema：
+
 ```bash
-# 本地调试
 npx wrangler d1 execute auth-center-db --local --file=./schema.sql
-
-# 线上生产环境
 npx wrangler d1 execute auth-center-db --remote --file=./schema.sql
 ```
 
-### 发版与部署
-打包并发布前端界面及后端 Worker 到 Cloudflare：
+如果是旧环境补充“会话中心”能力，则需要执行：
+
 ```bash
-npm install
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-user-sessions.sql
+```
+
+### 4. 构建与发布
+
+```bash
 npm run build
 npx wrangler deploy
 ```
 
-## 2. GitHub SSO 鉴权集成（强烈推荐）
+## 六、本地开发
 
-系统已深度内置 GitHub OAuth 鉴权，分别支持管理后台快速登录以及子应用授权跳转（登录界面提供“使用 GitHub 继续”按钮）。请在 `wrangler.toml` 的 `[vars]` 区域添加或配置环境变量：
+```bash
+npm install
+npm run build
+npx wrangler dev
+```
+
+如果只想跑前端开发服务器：
+
+```bash
+npm run dev
+```
+
+## 七、环境变量说明
+
+示例：
 
 ```toml
-GITHUB_CLIENT_ID = "您的_github_oauth_app客户端id"
-GITHUB_CLIENT_SECRET = "您的_github_oauth_app客户端秘钥"
-ADMIN_GITHUB_ID = "您的_github数字ID"
-```
-- 普通用户：可以由管理员下发生成的 `Copy GitHub Bind Link` 专属绑定链接绑定自己的身份。
-- 站长（Admin）：可直接点击内部右上角的 GitHub 图标通过 `ADMIN_GITHUB_ID` 白名单比对完成绑定。
-- 若作为跳转鉴权模式（带 `app_redirect` 参数），原有的登录窗口下方会自动加载使用 GitHub 登录的快捷按钮。
-
-## 3. API 与后台使用指南
-
-所有的 `/admin/*` 路由均受 Basic 鉴权保护。你需要在 `wrangler.toml` 设置 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD` 这对默认管理员密码。
-
-> **管理员可登录子应用：** `ADMIN_USERNAME` / `ADMIN_PASSWORD` 配置的管理员账号，可以直接在子应用的 SSO 登录页面输入登录。管理员 JWT 默认跳过所有应用权限检测，可访问所有已注册子应用，有效期默认 7 天。
-
-### 管理控制台 (Web UI)
-这个项目已经附带了一个**可视化的后台管理面板**。部署后直接访问你的 Workers 域名（或者配置好的自定义域名），即可通过管理员账密登录。
-- **用户管理**：创建账户与限制访问权限，支持立刻暂停或恢复。
-- **应用管理**：注册新的 Web Apps 接入此中心，并可配置是否开启 **Agent 用量限制**。点击应用名称进入详情页可查看实时 Token 消耗图表。
-- **权限管理矩阵**：指定哪些用户有权登录哪些 App 的可视化界面映射。
-- **Analytics 数据看板**：基于 Cloudflare Analytics Engine SQL API 聚合 `page_view`、`login_success`、`sso_auto_login` 三类访问事件，默认排除 `quota_consume`，并提供世界地图与 Raw Analytics Payload 调试面板。
-
-### 接口调用范例：子应用对接 SSO 流水线
-
-#### 1. 用户登录接口
-
-**接口地址：** `POST /login`  
-**请求体：** `{"username": "johndoe", "password": "securepassword123"}`
-
-**成功响应：**
-```json
-{
-  "token": "<jwt_string>",
-  "jwt": "<jwt_string>",
-  "uuid": "<user_uuid>",
-  "user_id": 1,
-  "name": "John Doe",
-  "username": "johndoe",
-  "timestamp": 1709390000
-}
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "your-admin-password"
+JWT_SECRET = "your-jwt-secret"
+CF_ACCOUNT_ID = "your-cloudflare-account-id"
+CF_API_TOKEN = "your-cloudflare-api-token"
+GITHUB_CLIENT_ID = "your-github-client-id"
+GITHUB_CLIENT_SECRET = "your-github-client-secret"
+ADMIN_GITHUB_ID = "your-admin-github-id"
 ```
 
-JWT Payload 包含字段：`{ uuid, user_id, name, username, status, exp }`。`name` 和 `username` 两个字段均已包含，子应用可以直接用于显示用户名或账号名。
+## 八、页面与路由说明
 
-#### 1.1 Analytics 统计口径说明
+### 1. 管理员登录页
 
-管理后台 `Statistics` 页默认只统计访问类事件：`page_view`、`login_success`、`sso_auto_login`。像 `quota_consume` 这样的内部配额写入不会计入访问量，避免把 Token 消耗误算成访问次数。页面底部的 `Raw Analytics Payload` 会直接展示参与统计的原始聚合结果，并保留 `event_type` 字段，方便核对统计来源。
+入口：
 
-#### 2. OAuth 风格前端无感知对接 (推荐)
+- `/`
 
-鉴权中心现在全面支持跨站重定向静默登录机制（基于 HttpOnly Cookie + 短期会话票据），无需在子应用手写复杂的 API。只需直接重定向用户到 Auth-Center 就行了：
+特点：
+
+- 只允许管理员登录
+- 支持浅色 / 暗黑模式
+- 页面下方有 `Users Here` 按钮，供普通用户进入用户登录页
+
+### 2. 管理后台
+
+主要 Tab：
+
+- Users
+- Applications
+- Permissions
+- Statistics
+
+顶部操作：
+
+- 主题切换
+- Admin Passkeys
+- Admin GitHub Bind
+
+### 3. 用户登录页
+
+路径：
+
+- `/users/`
+
+规则：
+
+- 只允许普通用户使用用户名 + 密码登录
+- admin 账号不能从这里登录
+- 登录成功后创建 Cookie 会话
+- 自动跳转回原始目标页，或者跳转到 `/{uuid}`
+
+### 4. 用户账户中心
+
+路径：
+
+- `/{uuid}`
+
+页面入口按钮：
+
+- Bind GitHub
+- Bind Passkey
+- Change Password
+- Login Sessions
+
+### 5. 登录会话中心
+
+路径：
+
+- `/session`
+
+展示字段：
+
+- 登录时间
+- IP 地址
+- 浏览器类型
+- 设备类型
+- 登录来源 app
+- 过期时间
+
+支持功能：
+
+- 一键关闭指定会话
+- 如果关闭的是当前会话，则立即退出登录
+
+### 6. 管理员 Passkey 管理页
+
+路径：
+
+- `/admin/passkey`
+
+行为说明：
+
+- 直接使用当前 admin 登录状态
+- 不跳转到用户登录页
+- 只管理管理员自己的 passkey
+
+## 九、用户自助链路说明
+
+管理员侧复制给用户的链接格式保持不变：
+
+- `/{uuid}/change-password`
+- `/{uuid}/sso-binding`
+- `/{uuid}/passkey`
+
+现在这些链接的行为是：
+
+- 如果用户已有有效会话，直接打开目标功能页
+- 如果用户未登录，先跳到 `/users/?redirect=...`
+- 用户登录完成后，再自动跳回原始目标页
+
+### 1. 修改密码
+
+旧逻辑：
+
+- 需要输入旧密码
+
+新逻辑：
+
+- 只验证当前用户会话
+- 页面只要求输入新密码和确认新密码
+
+### 2. GitHub 绑定
+
+旧逻辑：
+
+- 先输入密码验证，再跳 GitHub
+
+新逻辑：
+
+- 直接基于当前用户会话生成短期 bind token
+- 再跳转到 GitHub OAuth
+
+### 3. Passkey 管理
+
+旧逻辑：
+
+- 先输入密码验证
+
+新逻辑：
+
+- 基于当前用户会话直接生成 bind token
+- 进入 passkey 管理和新增流程
+
+## 十、管理员 Passkey 逻辑
+
+管理员顶部 `Passkeys` 按钮现在已经独立实现，不再走普通用户链路。
+
+### 当前行为
+
+- 点击后进入 `/admin/passkey`
+- 页面只校验当前管理员登录状态
+- 后端通过 `/admin/bind-token` 生成 admin 的 bind token
+- 后续 passkey 注册、重命名、删除都针对 admin 自身进行
+
+### 与普通用户链路的区别
+
+- 普通用户依赖 Cookie 会话
+- 管理员依赖当前 admin 登录 header
+- 管理员不会被重定向到 `/users/`
+
+## 十一、统计页口径说明
+
+### 1. 时间范围
+
+`Statistics` 页面只统计最近 7 天的数据，不会把所有历史数据累加到一起。
+
+### 2. 统计事件范围
+
+只纳入以下访问类事件：
+
+- `page_view`
+- `login_success`
+- `sso_auto_login`
+
+### 3. 不纳入访问量的事件
+
+例如：
+
+- `quota_consume`
+
+这些内部写入不会算进访问总量，避免把 token 消耗误统计成访问次数。
+
+### 4. 显示规则
+
+- `Total Visits` 使用 `K / M / G / T` 紧凑单位
+- 所有数字统一保留两位小数
+- 国家维度只保留“各国请求占比”展示
+- 原始聚合结果仍可在 `Raw Analytics Payload` 中查看
+
+## 十二、主要接口清单
+
+### 认证与会话
+
+- `POST /login`
+- `POST /api/users/login`
+- `POST /api/logout`
+- `GET /logout`
+- `GET /api/session`
+- `GET /api/user/session`
+
+### 用户自助
+
+- `POST /api/user/bind-token`
+- `POST /api/user/change-password`
+- `GET /api/user/sessions`
+- `DELETE /api/user/sessions/:sessionId`
+
+### GitHub
+
+- `GET /api/github/login`
+- `GET /api/github/callback`
+
+### Passkey
+
+- `POST /api/passkey/generate-registration-options`
+- `POST /api/passkey/verify-registration`
+- `GET /api/passkey/:uuid/list`
+- `PUT /api/passkey/:uuid/:id`
+- `DELETE /api/passkey/:uuid/:id`
+- `GET /api/passkey/admin/list`
+- `PUT /api/passkey/admin/:id`
+- `DELETE /api/passkey/admin/:id`
+- `GET /api/passkey/generate-authentication-options`
+- `POST /api/passkey/verify-authentication`
+
+### 管理后台
+
+- `POST /admin/bind-token`
+- `GET /admin/users`
+- `POST /admin/users`
+- `PUT /admin/users/:uuid`
+- `PUT /admin/users/:uuid/password`
+- `POST /admin/users/:uuid/pause`
+- `POST /admin/users/:uuid/continue`
+- `DELETE /admin/users/:uuid`
+- `GET /admin/apps`
+- `POST /admin/apps`
+- `PUT /admin/apps/:app_id`
+- `DELETE /admin/apps/:app_id`
+- `GET /admin/permissions`
+- `POST /admin/permissions`
+- `DELETE /admin/permissions`
+- `POST /admin/permissions/quota`
+- `GET /admin/summary`
+- `GET /admin/stats/quota`
+- `GET /admin/stats/usage`
+
+### 子应用对接
+
+- `GET /api/verify?app_id=...`
+- `GET /api/quota/check?uuid=...&app_id=...`
+- `POST /api/quota/consume`
+- `POST /api/track`
+
+## 十三、子应用接入示例
+
+### 1. 发起 SSO 登录
 
 ```javascript
 function loginWithSSO() {
-  const SSO_URL = 'https://accounts.aryuki.com';
-  const APP_ID = 'your-app-id'; // 在管理面板注册的应用名
-  const RETURN_URL = window.location.origin + '/sso-callback'; // 你的登录回调页
-  
-  // 1. 发起跳转
-  window.location.href = `${SSO_URL}/?client_id=${APP_ID}&redirect=${encodeURIComponent(RETURN_URL)}`;
+  const ssoUrl = 'https://accounts.aryuki.com';
+  const appId = 'your-app-id';
+  const returnUrl = `${window.location.origin}/sso-callback`;
+
+  window.location.href = `${ssoUrl}/?client_id=${appId}&redirect=${encodeURIComponent(returnUrl)}`;
 }
 ```
+
+### 2. 处理回调
 
 ```javascript
-// 在你的子应用端 (/sso-callback 页面)
-window.onload = function() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('token');
-  
-  if (token) {
-    // 2. 拿到票据，种到 localStorage 即可畅通无阻访问子应用后端
-    localStorage.setItem('app_session', token);
-    window.location.href = '/dashboard';
-  }
+const params = new URLSearchParams(window.location.search);
+const token = params.get('token');
+
+if (token) {
+  localStorage.setItem('app_session', token);
+  window.location.href = '/dashboard';
 }
 ```
 
-*附录注意：该模式只要用户在 `accounts.aryuki.com` 处于 Cookie 有效期，前往 B、C 应用时点击 Login 将会触发**0秒无感免密穿越**！*
-
-#### 3. 服务端 / API 层加密校验
-子应用本身的后端处理高敏数据时，请在每一个需要权限的路由加上以下中间件，用于核验 Token 及应用权限：
+### 3. 子应用后端校验用户
 
 ```javascript
 async function requireSSO(req, res, next) {
   const token = req.headers.authorization;
-  const SSO_URL = 'https://accounts.aryuki.com';
-  
-  if (!token) return res.status(401).json({ error: '权限丢失' });
+  const ssoUrl = 'https://accounts.aryuki.com';
 
-  try {
-    // 跟鉴权中心核验 Token
-    const verification = await fetch(`${SSO_URL}/api/verify?app_id=your-app-id`, {
-      method: 'GET',
-      headers: { 'Authorization': token }
-    });
-
-    if (!verification.ok) {
-      return res.status(403).json({ error: 'SSO 验证失败或该账户被管理员冻结' });
-    }
-
-    const { user } = await verification.json();
-    req.user = user; // 校验成功，放行后级请求
-    next();
-  } catch (error) {
-    res.status(500).json({ error: 'SSO 服务器内部通讯报错' });
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
   }
-}
-```
 
-#### 4. 用户自助修改密码
-
-无需管理员介入，用户可以通过以下独立页面自行修改密码：
-
-**页面地址：** `https://accounts.aryuki.com/<user_uuid>/change-password`
-
-**后端接口：** `POST /api/users/<uuid>/change-password`
-**请求体：** `{"oldPassword": "当前密码", "newPassword": "新密码"}`
-
-页面会在更改前验证旧密码。管理员可在 User Profile 页面点击"Copy Self-Service Link"按钮复制链接后发给用户。
-
----
-
-## 4. 子应用退出登录 → 同步退出 Auth Center
-
-当用户在子应用点击退出（Sign Out）时，应**同时清除 Auth Center 的 SSO 会话 Cookie**。
-
-这样做的好处：
-- 下次再点击"登录"时，Auth Center **不会自动静默重定向**，而是显示登录表单
-- 用户可以**切换到其他账号**，或用相同账号重新输入密码登录
-- 实现**全系统真正注销**，而非仅仅清除子应用本地状态
-
-### 两种退出方式
-
-#### 方式一：重定向退出（推荐，适合浏览器场景）
-
-```
-GET https://accounts.aryuki.com/logout?redirect=<你的回调地址>
-```
-
-Auth Center 会清除 `sso_session` Cookie，然后立即跳转到你指定的 URL。
-
-**在子应用的 JavaScript 中实现：**
-```javascript
-function handleSignOut() {
-  // 第一步：清除子应用自己的本地会话
-  localStorage.removeItem('app_session');
-
-  // 第二步：跳转到 Auth Center 清除 SSO Cookie
-  const SSO_URL = 'https://accounts.aryuki.com';
-  const afterLogoutUrl = encodeURIComponent(window.location.origin + '/login');
-  window.location.href = `${SSO_URL}/logout?redirect=${afterLogoutUrl}`;
-}
-```
-
-跳转完成后，用户会回到子应用的登录页。下次点击"登录"，Auth Center 将展示全新的账密输入表单，用户可以切换账号或重新登录。
-
-#### 方式二：API 退出（适合后端或 fetch 调用场景）
-
-```
-POST https://accounts.aryuki.com/api/logout
-```
-
-通过 `fetch` 调用时，**必须加 `credentials: 'include'`**，否则浏览器无法将 `sso_session` Cookie 发送过去（该 Cookie 是 HttpOnly，只能由服务端清除，浏览器无法直接操作）：
-
-```javascript
-async function handleSignOut() {
-  // 第一步：清除子应用本地 session
-  localStorage.removeItem('app_session');
-
-  // 第二步：调用 Auth Center 退出接口
-  await fetch('https://accounts.aryuki.com/api/logout', {
-    method: 'POST',
-    credentials: 'include',  // ← 关键！必须加，否则 Cookie 无法被发送和清除
+  const verification = await fetch(`${ssoUrl}/api/verify?app_id=your-app-id`, {
+    headers: { Authorization: token },
   });
 
-  // 第三步：跳转到子应用的登录页
-  window.location.href = '/login';
+  if (!verification.ok) {
+    return res.status(403).json({ error: 'SSO verification failed' });
+  }
+
+  const { user } = await verification.json();
+  req.user = user;
+  next();
 }
 ```
 
-> **关于 `credentials: 'include'` 的说明：**
-> `sso_session` 是一个由 Auth Center 种在 `accounts.aryuki.com` 域下的 `HttpOnly` Cookie，子应用的 JavaScript 无法直接读取或删除它。
-> 为了清除它，浏览器必须将其发送回 `accounts.aryuki.com`，这只有在 fetch 请求中加了 `credentials: 'include'` 时才会发生。
-> 如果不加这个参数，退出请求会成功返回 200，但 SSO Cookie 实际上不会被清除，下次用户访问子应用还是会自动静默登录！
+## 十四、统一退出登录
 
-#### 方式三（推荐 Cloudflare Workers 子应用）：后端统一处理
+### 方案一：重定向退出
 
-如果你的子应用也是基于 Cloudflare Workers（比如用 Hono），可以在子应用的后端统一处理退出逻辑，代理转发 Cookie 并清除双端会话：
+```text
+GET https://accounts.aryuki.com/logout?redirect=<你的返回地址>
+```
 
-```typescript
-// 子应用 Hono worker 中
-app.post('/api/signout', async (c) => {
-  // 第一步：清除子应用自己的 session Cookie
-  setCookie(c, 'app_session', '', { path: '/', maxAge: 0 });
+### 方案二：API 退出
 
-  // 第二步：代理转发退出请求到 Auth Center，并转发浏览器的 Cookie 头
-  await fetch('https://accounts.aryuki.com/api/logout', {
-    method: 'POST',
-    headers: { 'Cookie': c.req.header('Cookie') || '' }
-  });
-
-  return c.json({ success: true });
+```javascript
+await fetch('https://accounts.aryuki.com/api/logout', {
+  method: 'POST',
+  credentials: 'include',
 });
 ```
 
----
+注意：
 
-## 5. 大模型 API 用量控制与限频 (Quota & Rate Limiting)
+- 必须带 `credentials: 'include'`
+- 否则浏览器不会把 `sso_session` Cookie 发回认证中心
+- 结果就是看起来请求成功了，但实际上 SSO 会话没有被清掉
 
-系统现在在原有身份鉴权的基础上，深度集成了 **用量控制引擎 (API Gateway)** 的能力：
-非常适合使用大模型 (LLMs) 等按 Token/请求计费的 SubApp 子应用接入。
+## 十五、上线后建议检查项
 
-**启用方式：在注册应用时（或通过应用详情页）勾选“开启 Agent 用量限制 (Enable Agent Limits)”。**
-开启后，不仅可以使用下方的限额检查，还可以在 App 详情页看到**按用户、按日 (UTC+8) 绘制的折线统计图表**。
+- 管理员登录是否正常
+- `Users Here` 是否正确跳到 `/users/`
+- 普通用户登录后是否进入 `/{uuid}`
+- `/{uuid}/change-password` 未登录时是否先跳 `/users/`
+- `/session` 是否能看到当前会话信息
+- 是否能成功关闭一个历史会话
+- `/admin/passkey` 是否直接打开 admin passkey 管理页
+- `Statistics` 是否只显示最近 7 天数据
+- 国家请求占比是否显示正常
 
-在管理后台（Permissions 页面），管理员可以通过 `Settings` (齿轮) 图标，针对开启了用量限制的应用和具体用户单独配置以下额度：
-- **RPM (Requests Per Minute)**: 每分钟发送消息请求的 QPS 上限。
-- **RPD (Requests Per Day)**: 每天会话发送总次数上限。
-- **Tokens Per Day**: 每天允许使用的 Token 消耗总量上限（LLM 场景）。
+## 十六、运维建议
 
-### 对接用量引擎
-请在你的子应用 (SubApp) 代码逻辑中，分别接入 Auth-Center 提供的**前置校验 (Pre-check)** 和 **后置消费上报 (Post-deduction)** 接口：
+如果后续准备长期维护，建议再补以下内容：
 
-- **Pre-check:** `GET /api/quota/check?uuid=<uuid>&app_id=<app_id>` (发起 AI 请求前确认是否超时或超频)
-- **Post-consume:** `POST /api/quota/consume` (收到 AI 响应后记录并累加消耗的 token 值)
-
-> 💡 **详细开发对接教程**，请查阅根目录下的 [way1.md](./way1.md) 指南文件。
-
----
-
-更多配置详见源码 `src/` 结构与 `wrangler.toml` 环境设置。
+- 数据库迁移版本管理规范
+- 子应用接入模板仓库
+- 接口契约文档自动化
+- 前端组件进一步拆分
+- 大包按路由拆包优化
