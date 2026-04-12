@@ -30,3 +30,8 @@ database_id = "e72fc2ba-ff4b-4ec9-93e2-e5e6cbc3dedf"
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "auth-center"
+
+[[r2_buckets]]
+binding = "AVATAR_BUCKET"
+bucket_name = "auth-center-save"
+preview_bucket_name = "auth-center-save"

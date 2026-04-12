@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Github, KeyRound, LockKeyhole, MonitorSmartphone, UserCircle2 } from 'lucide-react';
+import { ArrowRight, Github, KeyRound, LockKeyhole, MonitorSmartphone, Settings2, UserCircle2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import {
   UserLogoutButton,
@@ -11,6 +11,13 @@ import {
 } from './userPortal';
 
 const ACTIONS = [
+  {
+    key: 'profile',
+    title: 'Edit Profile',
+    description: 'Open a dedicated profile settings page for your full name, birthday, and avatar.',
+    icon: Settings2,
+    href: (uuid: string) => `/${uuid}/edit`,
+  },
   {
     key: 'github',
     title: 'Bind GitHub',
@@ -48,7 +55,7 @@ export default function UserHome() {
   return (
     <UserPortalScaffold
       title="Account Center"
-      description="Use the cards below to manage your linked sign-in methods, password, and active sessions."
+      description="Use the cards below to open profile settings, linked sign-in methods, password, and active sessions."
       actions={<UserLogoutButton />}
     >
       {loading || !session ? (
@@ -58,14 +65,19 @@ export default function UserHome() {
           <div className="grid gap-4 md:grid-cols-3">
             <div className="ui-card p-5 md:col-span-2">
               <div className="flex items-start gap-4">
-                <div className="ui-logo-badge">
-                  <UserCircle2 className="h-5 w-5" />
-                </div>
+                {session.avatar_url ? (
+                  <img src={session.avatar_url} alt={`${session.name || session.username} avatar`} className="h-16 w-16 rounded-full object-cover ring-1 ring-[var(--border)]" />
+                ) : (
+                  <div className="ui-logo-badge h-16 w-16">
+                    <UserCircle2 className="h-7 w-7" />
+                  </div>
+                )}
                 <div className="min-w-0">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">Signed in as</p>
                   <h2 className="mt-2 truncate text-xl font-semibold text-[var(--text-primary)]">{session.name || session.username}</h2>
                   <p className="mt-1 text-sm text-[var(--text-secondary)]">@{session.username}</p>
                   <p className="mt-3 text-sm text-[var(--text-secondary)]">UUID: <span className="font-mono text-[var(--text-primary)]">{session.uuid}</span></p>
+                  <p className="mt-2 text-sm text-[var(--text-secondary)]">Birthday: <span className="text-[var(--text-primary)]">{session.birthday || 'Not set'}</span></p>
                 </div>
               </div>
             </div>

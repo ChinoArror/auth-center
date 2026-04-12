@@ -65,6 +65,7 @@ The project is designed for teams that want one hosted authentication center and
 - `src/App.tsx`: Admin dashboard, statistics UI, routing entry
 - `src/UserLogin.tsx`: User login page
 - `src/UserHome.tsx`: User account hub
+- `src/UserEditProfile.tsx`: Dedicated profile editor for full name, birthday, and avatar
 - `src/SessionCenter.tsx`: User login session management page
 - `src/ChangePassword.tsx`: Session-backed password change page
 - `src/SsoBinding.tsx`: Session-backed GitHub binding page
@@ -74,6 +75,8 @@ The project is designed for teams that want one hosted authentication center and
 - `src/index.css`: Design tokens and theme-aware component styling
 - `schema.sql`: Full schema for fresh deployments
 - `migrate-user-sessions.sql`: Migration for `user_sessions`
+- `migrate-register-codes.sql`: Migration for `register_codes`
+- `migrate-user-avatar-r2.sql`: Migration for `users.avatar_key`
 
 ## Data Model Overview
 
@@ -104,6 +107,7 @@ Set or review:
 - Worker name and custom domain route
 - D1 binding
 - Analytics Engine binding
+- R2 avatar bucket binding
 - Admin credentials
 - JWT secret
 - GitHub OAuth credentials
@@ -122,6 +126,13 @@ If your environment already exists and only needs session support:
 
 ```bash
 npx wrangler d1 execute auth-center-db --remote --file=./migrate-user-sessions.sql
+```
+
+If your environment already exists and needs register-code and avatar-storage support:
+
+```bash
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-register-codes.sql
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-user-avatar-r2.sql
 ```
 
 ### 4. Build and deploy
@@ -175,6 +186,7 @@ Tabs:
 - Users
 - Applications
 - Permissions
+- Register
 - Statistics
 
 Header actions:
@@ -204,10 +216,25 @@ Path:
 
 Actions:
 
+- Edit profile
 - Bind GitHub
 - Bind passkey
 - Change password
 - View login sessions
+
+### User Profile Edit
+
+Path:
+
+- `/{uuid}/edit`
+
+Capabilities:
+
+- Edit full name
+- Edit birthday
+- Upload or remove avatar
+- Use active session validation only
+- Save new avatars to R2 and expose `avatar_url`
 
 ### User Session Center
 
@@ -310,6 +337,8 @@ Examples of events that are intentionally excluded from visit totals:
 
 ### User Self-Service
 
+- `GET /api/avatar/:uuid`
+- `PUT /api/user/profile`
 - `POST /api/user/bind-token`
 - `POST /api/user/change-password`
 - `GET /api/user/sessions`
@@ -435,6 +464,8 @@ Use `credentials: 'include'` so the browser sends the `sso_session` cookie back 
 - Admin login is separate from user login
 - User self-service pages rely on the cookie-backed user session
 - Admin passkeys rely on current admin authentication state
+- Profile editing now lives on `/{uuid}/edit`
+- Avatar uploads are stored in the `auth-center-save` R2 bucket and are returned as optional `avatar_url`
 - Statistics use Analytics Engine SQL API instead of GraphQL because custom blob fields are queried there
 - If analytics look too high, verify that only access events are counted and that the time window is 7 days
 

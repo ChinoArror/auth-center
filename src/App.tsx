@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github, Zap, Globe, Database, Code2, Box, Layers, Cpu, Rocket, Star, Sparkles, Bot, Wifi, Lock, Palette } from 'lucide-react';
+import { Users, LayoutGrid, KeyRound, LogOut, CheckCircle2, XCircle, Plus, Trash2, Shield, Settings, Activity, BarChart3, PieChart, Clock, ExternalLink, Github, Zap, Globe, Database, Code2, Box, Layers, Cpu, Rocket, Star, Sparkles, Bot, Wifi, Lock, Palette, Ticket } from 'lucide-react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, Legend } from 'recharts';
 import UserProfile from './UserProfile';
@@ -13,7 +13,10 @@ import { startAuthentication } from '@simplewebauthn/browser';
 import { ThemeToggle, useThemeMode } from './theme';
 import UserLogin from './UserLogin';
 import UserHome from './UserHome';
+import UserEditProfile from './UserEditProfile';
 import SessionCenter from './SessionCenter';
+import RegisterCodeManager from './RegisterCodeManager';
+import RegisterPage from './RegisterPage';
 
 const API_BASE = ''; // Base URL for the worker (empty string to use the current origin)
 
@@ -84,6 +87,15 @@ function getRegionLabel(code: string) {
   } catch {
     return normalizedCode;
   }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Unable to read image file'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function CountrySharePanel({ countries, topCountry, totalEvents }: { countries: Array<{ name: string; value: number }>; topCountry: string; totalEvents: number }) {
@@ -408,9 +420,22 @@ function Dashboard() {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
+    const avatarFile = fd.get('avatar');
+    const body: any = {
+      username: String(fd.get('username') || ''),
+      name: String(fd.get('name') || ''),
+      password: String(fd.get('password') || ''),
+      cookie_expiry_days: Number(fd.get('cookie_expiry_days') || 7),
+      birthday: String(fd.get('birthday') || '') || null,
+    };
+
+    if (avatarFile instanceof File && avatarFile.size > 0) {
+      body.avatar_data = await readFileAsDataUrl(avatarFile);
+    }
+
     const res = await authFetch('/admin/users', {
       method: 'POST',
-      body: JSON.stringify(Object.fromEntries(fd.entries()))
+      body: JSON.stringify(body)
     });
     if (res.ok) { fetchUsers(); form.reset(); }
   };
@@ -634,9 +659,14 @@ function Dashboard() {
               </motion.button>
             </form>
 
-            <Link to="/users/" className="ui-button-secondary mt-6 inline-flex w-full items-center justify-center gap-2 no-underline">
-              Users Here
-            </Link>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <Link to="/users/" className="ui-button-secondary inline-flex w-full items-center justify-center gap-2 no-underline">
+                Users Here
+              </Link>
+              <Link to="/register" className="ui-button-secondary inline-flex w-full items-center justify-center gap-2 no-underline">
+                Register
+              </Link>
+            </div>
           </motion.div>
         </div>
       </div>
@@ -684,6 +714,7 @@ function Dashboard() {
             { id: 'users', icon: Users, label: 'Users' },
             { id: 'apps', icon: LayoutGrid, label: 'Applications' },
             { id: 'permissions', icon: KeyRound, label: 'Permissions' },
+            { id: 'register', icon: Ticket, label: 'Register' },
             { id: 'statistics', icon: BarChart3, label: 'Statistics' }
           ].map(tab => (
             <motion.button
@@ -767,6 +798,11 @@ function Dashboard() {
                         <input name="username" placeholder="Username" required className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-purple-500 outline-none transition-all placeholder-white/30" />
                         <input name="name" placeholder="Full Name" required className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-purple-500 outline-none transition-all placeholder-white/30" />
                         <input name="password" type="password" placeholder="Password" required className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-purple-500 outline-none transition-all placeholder-white/30" />
+                        <input name="birthday" type="date" className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-purple-500 outline-none transition-all placeholder-white/30 text-white" />
+                        <label className="block rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-3 text-sm text-white/60">
+                          Avatar (Optional)
+                          <input name="avatar" type="file" accept="image/*" className="mt-2 block w-full text-xs text-white/50 file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-white" />
+                        </label>
                         <input name="cookie_expiry_days" type="number" placeholder="Session Expiry (Days)" defaultValue={7} className="w-full bg-black/30 border border-white/5 rounded-xl px-4 py-3 focus:ring-2 focus:ring-purple-500 outline-none transition-all placeholder-white/30 text-white" />
                         <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-medium py-3 rounded-xl shadow-lg transition-colors mt-2">
                           Create User
@@ -967,6 +1003,10 @@ function Dashboard() {
                   )}
                 </div>
               </div>
+            )}
+
+            {activeTab === 'register' && (
+              <RegisterCodeManager authFetch={authFetch} apps={apps} />
             )}
 
             {activeTab === 'statistics' && (() => {
@@ -1276,8 +1316,10 @@ export default function App() {
   return (
     <Routes>
       <Route path="/admin/passkey" element={<AdminPasskeyManage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route path="/users/*" element={<UserLogin />} />
       <Route path="/session" element={<SessionCenter />} />
+      <Route path="/:uuid/edit" element={<UserEditProfile />} />
       <Route path="/:uuid/change-password" element={<ChangePassword />} />
       <Route path="/:uuid/sso-binding" element={<SsoBinding />} />
       <Route path="/:uuid/passkey" element={<UserPasskeyManage />} />

@@ -13,6 +13,9 @@ CREATE TABLE users (
     status TEXT NOT NULL DEFAULT 'active', -- 'active' or 'paused'
     cookie_expiry_days INTEGER NOT NULL DEFAULT 7,
     github_id TEXT UNIQUE,
+    birthday TEXT,
+    avatar_data TEXT,
+    avatar_key TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -71,3 +74,16 @@ CREATE TABLE user_sessions (
 );
 CREATE INDEX idx_user_sessions_uuid ON user_sessions(uuid);
 CREATE INDEX idx_user_sessions_active ON user_sessions(uuid, revoked_at, expires_at);
+
+CREATE TABLE register_codes (
+    code TEXT PRIMARY KEY,
+    template_name TEXT,
+    config_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unused',
+    used_by_uuid TEXT,
+    used_by_username TEXT,
+    used_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_register_codes_status ON register_codes(status);
+CREATE INDEX idx_register_codes_created_at ON register_codes(created_at);

@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { KeyRound, Shield, User } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeToggle, useThemeMode } from './theme';
 import { API_BASE, sanitizeRedirectPath } from './userPortal';
 
@@ -13,7 +13,9 @@ export default function UserLogin() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
 
-  const redirectTarget = sanitizeRedirectPath(new URLSearchParams(location.search).get('redirect'), '');
+  const searchParams = new URLSearchParams(location.search);
+  const redirectTarget = sanitizeRedirectPath(searchParams.get('redirect'), '');
+  const registered = searchParams.get('registered') === '1';
 
   React.useEffect(() => {
     let cancelled = false;
@@ -89,6 +91,11 @@ export default function UserLogin() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {registered ? (
+              <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-3 text-sm text-[var(--text-primary)]">
+                Your account was created successfully. Sign in with your new credentials.
+              </div>
+            ) : null}
             {error ? (
               <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-3 text-sm text-[var(--danger)]">
                 {error}
@@ -124,14 +131,19 @@ export default function UserLogin() {
             </motion.button>
           </form>
 
-          <div className="ui-card-subtle mt-6 p-4">
-            <div className="flex items-start gap-3">
-              <Shield className="mt-0.5 h-4 w-4 text-[var(--primary)]" />
-              <div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">What happens next</p>
-                <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                  After sign-in, you will return to your requested self-service page or your account hub. Admin accounts cannot log in here.
-                </p>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <Link to="/register" className="ui-button-secondary inline-flex w-full items-center justify-center gap-2 no-underline">
+              Register
+            </Link>
+            <div className="ui-card-subtle w-full p-4">
+              <div className="flex items-start gap-3">
+                <Shield className="mt-0.5 h-4 w-4 text-[var(--primary)]" />
+                <div>
+                  <p className="text-sm font-medium text-[var(--text-primary)]">What happens next</p>
+                  <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                    After sign-in, you will return to your requested self-service page or your account hub. Admin accounts cannot log in here.
+                  </p>
+                </div>
               </div>
             </div>
           </div>

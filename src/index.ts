@@ -8,11 +8,25 @@ import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthen
 type D1Database = any;
 type AnalyticsEngineDataset = any;
 type Fetcher = any;
+type R2Bucket = any;
+
+type RegisterCodePermission = {
+  app_id: string;
+  rpm_limit: number | null;
+  rpd_limit: number | null;
+  daily_token_limit: number | null;
+};
+
+type RegisterCodeConfig = {
+  cookie_expiry_days: number;
+  permissions: RegisterCodePermission[];
+};
 
 type Bindings = {
   DB: D1Database;
   ANALYTICS: AnalyticsEngineDataset;
   ASSETS: Fetcher;
+  AVATAR_BUCKET: R2Bucket;
   ADMIN_USERNAME: string;
   ADMIN_PASSWORD: string;
   JWT_SECRET: string;
@@ -88,6 +102,157 @@ function sanitizeRedirectPath(input: unknown, fallback: string) {
   return input;
 }
 
+function getRequestOrigin(c: any) {
+  return new URL(c.req.url).origin;
+}
+
+function buildAvatarUrl(c: any, uuid: string, avatarKey?: string | null, legacyAvatarData?: string | null) {
+  if (!avatarKey && !legacyAvatarData) return null;
+  return `${getRequestOrigin(c)}/api/avatar/${uuid}`;
+}
+
+function getAvatarExtension(contentType: string) {
+  switch (contentType) {
+    case 'image/jpeg':
+      return 'jpg';
+    case 'image/png':
+      return 'png';
+    case 'image/webp':
+      return 'webp';
+    case 'image/gif':
+      return 'gif';
+    default:
+      return 'bin';
+  }
+}
+
+function parseAvatarDataUrl(input: string) {
+  const match = input.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Avatar must be a valid image data URL');
+  }
+
+  const contentType = match[1].toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(contentType)) {
+    throw new Error('Unsupported avatar image type');
+  }
+
+  const binary = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
+  return {
+    contentType,
+    body: binary,
+    extension: getAvatarExtension(contentType),
+  };
+}
+
+async function deleteAvatarIfPresent(c: any, avatarKey?: string | null) {
+  if (!avatarKey) return;
+  await c.env.AVATAR_BUCKET.delete(avatarKey).catch(() => { });
+}
+
+async function resolveAvatarKeyUpdate(c: any, uuid: string, nextAvatarData: unknown, currentAvatarKey?: string | null) {
+  if (nextAvatarData === undefined) {
+    return currentAvatarKey || null;
+  }
+
+  const normalized = typeof nextAvatarData === 'string' ? nextAvatarData.trim() : '';
+  if (!normalized) {
+    await deleteAvatarIfPresent(c, currentAvatarKey);
+    return null;
+  }
+
+  if (!normalized.startsWith('data:image/')) {
+    throw new Error('Avatar payload must be an uploaded image');
+  }
+
+  const parsed = parseAvatarDataUrl(normalized);
+  const objectKey = `Avatar/${uuid}/${Date.now()}.${parsed.extension}`;
+  await c.env.AVATAR_BUCKET.put(objectKey, parsed.body, {
+    httpMetadata: {
+      contentType: parsed.contentType,
+      cacheControl: 'public, max-age=86400',
+    }
+  });
+  await deleteAvatarIfPresent(c, currentAvatarKey);
+  return objectKey;
+}
+
+function toUserSummary(c: any, user: any) {
+  return {
+    user_id: user.user_id,
+    uuid: user.uuid,
+    username: user.username,
+    name: user.name,
+    status: user.status,
+    cookie_expiry_days: user.cookie_expiry_days,
+    password_plain: user.password_plain,
+    created_at: user.created_at,
+    github_id: user.github_id,
+    birthday: user.birthday || null,
+    avatar_url: buildAvatarUrl(c, user.uuid, user.avatar_key, user.avatar_data),
+  };
+}
+
+function buildTokenPayload(c: any, user: any, sessionId?: string | null) {
+  return {
+    uuid: user.uuid,
+    user_id: user.user_id,
+    name: user.name,
+    username: user.username,
+    status: user.status,
+    avatar_url: buildAvatarUrl(c, user.uuid, user.avatar_key, user.avatar_data),
+    ...(sessionId ? { session_id: sessionId } : {}),
+  };
+}
+
+function normalizeLimitValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : null;
+}
+
+function parseRegisterCodeConfig(input: any): RegisterCodeConfig {
+  const cookieExpiry = normalizeLimitValue(input?.cookie_expiry_days) ?? 7;
+  const permissions = Array.isArray(input?.permissions)
+    ? input.permissions
+      .map((permission: any) => ({
+        app_id: String(permission?.app_id || '').trim(),
+        rpm_limit: normalizeLimitValue(permission?.rpm_limit),
+        rpd_limit: normalizeLimitValue(permission?.rpd_limit),
+        daily_token_limit: normalizeLimitValue(permission?.daily_token_limit),
+      }))
+      .filter((permission: RegisterCodePermission) => permission.app_id)
+    : [];
+
+  return {
+    cookie_expiry_days: Math.max(1, cookieExpiry),
+    permissions,
+  };
+}
+
+async function applyRegisterCodeConfigToUser(c: any, uuid: string, config: RegisterCodeConfig) {
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const permission of config.permissions) {
+    await c.env.DB.prepare(`
+      INSERT INTO user_apps (uuid, app_id, rpm_limit, rpd_limit, daily_token_limit, last_reset_date)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(uuid, app_id) DO UPDATE SET
+        rpm_limit = excluded.rpm_limit,
+        rpd_limit = excluded.rpd_limit,
+        daily_token_limit = excluded.daily_token_limit,
+        last_reset_date = excluded.last_reset_date
+    `).bind(
+      uuid,
+      permission.app_id,
+      permission.rpm_limit,
+      permission.rpd_limit,
+      permission.daily_token_limit,
+      today
+    ).run();
+  }
+}
+
 async function revokeSession(c: any, sessionId: string) {
   await c.env.DB.prepare(
     'UPDATE user_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE session_id = ? AND revoked_at IS NULL'
@@ -108,7 +273,7 @@ async function authenticateCookieSession(c: any, allowAdmin = false) {
     if (!payload.session_id) return null;
 
     const user: any = await c.env.DB.prepare(
-      'SELECT uuid, username, name, status, cookie_expiry_days FROM users WHERE uuid = ?'
+      'SELECT uuid, user_id, username, name, status, cookie_expiry_days, birthday, avatar_data, avatar_key FROM users WHERE uuid = ?'
     ).bind(payload.uuid).first();
 
     if (!user || user.status !== 'active') return null;
@@ -177,20 +342,14 @@ app.post('/login', async (c) => {
     userToAuth = user;
   }
 
-  const payload = {
-    uuid: userToAuth.uuid,
-    user_id: userToAuth.user_id,
-    name: userToAuth.name,
-    username: userToAuth.username,
-    status: userToAuth.status
-  };
+  const payload = buildTokenPayload(c, userToAuth);
 
   let tokenPayload: any = payload;
   if (userToAuth.uuid !== 'admin') {
     const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + userToAuth.cookie_expiry_days * 86400 * 1000).toISOString();
     await persistUserSession(c, userToAuth, sessionId, expiresAt, app_id || 'auth-center');
-    tokenPayload = { ...payload, session_id: sessionId };
+    tokenPayload = buildTokenPayload(c, userToAuth, sessionId);
   }
 
   const token = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
@@ -204,6 +363,7 @@ app.post('/login', async (c) => {
     user_id: userToAuth.user_id,
     name: userToAuth.name,
     username: userToAuth.username,
+    avatar_url: buildAvatarUrl(c, userToAuth.uuid, userToAuth.avatar_key, userToAuth.avatar_data),
     timestamp: Math.floor(Date.now() / 1000)
   });
 });
@@ -229,14 +389,11 @@ app.post('/api/users/login', async (c) => {
   const expiresAt = new Date(Date.now() + user.cookie_expiry_days * 86400 * 1000).toISOString();
   await persistUserSession(c, user, sessionId, expiresAt, 'user-portal');
 
-  const token = await generateJWT({
-    uuid: user.uuid,
-    user_id: user.user_id,
-    name: user.name,
-    username: user.username,
-    status: user.status,
-    session_id: sessionId
-  } as any, c.env.JWT_SECRET, user.cookie_expiry_days);
+  const token = await generateJWT(
+    buildTokenPayload(c, user, sessionId) as any,
+    c.env.JWT_SECRET,
+    user.cookie_expiry_days
+  );
 
   setUserSessionCookie(c, token, user.cookie_expiry_days * 86400);
 
@@ -244,8 +401,93 @@ app.post('/api/users/login', async (c) => {
     success: true,
     uuid: user.uuid,
     username: user.username,
+    avatar_url: buildAvatarUrl(c, user.uuid, user.avatar_key, user.avatar_data),
     redirect_to: sanitizeRedirectPath(redirect_to, `/${user.uuid}`)
   });
+});
+
+app.post('/api/register', async (c) => {
+  const { username, password, name, birthday, register_code, avatar_data } = await c.req.json();
+
+  if (!username || !password || !name || !register_code) {
+    return c.json({ error: 'Username, password, full name, and register code are required' }, 400);
+  }
+
+  if (username === c.env.ADMIN_USERNAME) {
+    return c.json({ error: 'This username is reserved' }, 400);
+  }
+
+  const existingUser: any = await c.env.DB.prepare('SELECT uuid FROM users WHERE username = ?').bind(username).first();
+  if (existingUser) {
+    return c.json({ error: 'Username already exists' }, 409);
+  }
+
+  const registerCodeRecord: any = await c.env.DB.prepare(`
+    SELECT code, config_json, status
+    FROM register_codes
+    WHERE code = ?
+  `).bind(register_code).first();
+
+  if (!registerCodeRecord) return c.json({ error: 'Register code not found' }, 404);
+  if (registerCodeRecord.status === 'pause') return c.json({ error: 'Register code is paused' }, 403);
+  if (registerCodeRecord.status === 'used') return c.json({ error: 'Register code has already been used' }, 409);
+  if (registerCodeRecord.status !== 'unused') return c.json({ error: 'Register code is unavailable' }, 403);
+
+  let config: RegisterCodeConfig;
+  try {
+    config = parseRegisterCodeConfig(JSON.parse(registerCodeRecord.config_json));
+  } catch {
+    return c.json({ error: 'Register code configuration is invalid' }, 500);
+  }
+
+  const uuid = crypto.randomUUID();
+  const salt = generateSalt();
+  const hash = await hashPassword(password, salt);
+  let avatarKey: string | null = null;
+
+  try {
+    avatarKey = await resolveAvatarKeyUpdate(c, uuid, avatar_data, null);
+    await c.env.DB.prepare(`
+      INSERT INTO users (
+        uuid, username, name, password_hash, password_salt, password_plain, cookie_expiry_days, birthday, avatar_data, avatar_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      uuid,
+      username,
+      name,
+      hash,
+      salt,
+      password,
+      config.cookie_expiry_days,
+      birthday || null,
+      null,
+      avatarKey
+    ).run();
+
+    await applyRegisterCodeConfigToUser(c, uuid, config);
+
+    const claimResult: any = await c.env.DB.prepare(`
+      UPDATE register_codes
+      SET status = 'used', used_by_uuid = ?, used_by_username = ?, used_at = CURRENT_TIMESTAMP
+      WHERE code = ? AND status = 'unused'
+    `).bind(uuid, username, register_code).run();
+
+    if (!claimResult?.meta?.changes) {
+      throw new Error('Register code is no longer available');
+    }
+
+    return c.json({
+      success: true,
+      uuid,
+      username,
+      redirect_to: '/users/',
+    });
+  } catch (e: any) {
+    await deleteAvatarIfPresent(c, avatarKey);
+    await c.env.DB.prepare('DELETE FROM user_apps WHERE uuid = ?').bind(uuid).run().catch(() => { });
+    await c.env.DB.prepare('DELETE FROM users WHERE uuid = ?').bind(uuid).run().catch(() => { });
+    return c.json({ error: e.message || 'Registration failed' }, 400);
+  }
 });
 
 // Logout
@@ -285,9 +527,43 @@ app.get('/api/user/session', async (c) => {
     uuid: activeSession.user.uuid,
     username: activeSession.user.username,
     name: activeSession.user.name,
+    birthday: activeSession.user.birthday || null,
+    avatar_url: buildAvatarUrl(c, activeSession.user.uuid, activeSession.user.avatar_key, activeSession.user.avatar_data),
     exp: activeSession.payload.exp,
     session: activeSession.session
   });
+});
+
+app.get('/api/avatar/:uuid', async (c) => {
+  const uuid = c.req.param('uuid');
+  const user: any = await c.env.DB.prepare(
+    'SELECT avatar_key, avatar_data FROM users WHERE uuid = ?'
+  ).bind(uuid).first();
+
+  if (!user) return c.json({ error: 'User not found' }, 404);
+
+  if (user.avatar_key) {
+    const object = await c.env.AVATAR_BUCKET.get(user.avatar_key);
+    if (!object) return c.json({ error: 'Avatar not found' }, 404);
+
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+    headers.set('cache-control', headers.get('cache-control') || 'public, max-age=86400');
+    return new Response(object.body, { headers });
+  }
+
+  if (typeof user.avatar_data === 'string' && user.avatar_data.startsWith('data:image/')) {
+    const parsed = parseAvatarDataUrl(user.avatar_data);
+    return new Response(parsed.body, {
+      headers: {
+        'content-type': parsed.contentType,
+        'cache-control': 'public, max-age=86400',
+      }
+    });
+  }
+
+  return c.json({ error: 'Avatar not found' }, 404);
 });
 
 app.post('/api/user/bind-token', async (c) => {
@@ -315,6 +591,46 @@ app.post('/api/user/change-password', async (c) => {
   ).bind(newHash, newSalt, newPassword, activeSession.user.uuid).run();
 
   return c.json({ success: true });
+});
+
+app.put('/api/user/profile', async (c) => {
+  const activeSession = await authenticateCookieSession(c);
+  if (!activeSession) return c.json({ error: 'Authentication required' }, 401);
+
+  const { name, birthday, avatar_data } = await c.req.json();
+  if (!name || !String(name).trim()) {
+    return c.json({ error: 'Full name is required' }, 400);
+  }
+
+  try {
+    const avatarKey = await resolveAvatarKeyUpdate(c, activeSession.user.uuid, avatar_data, activeSession.user.avatar_key);
+    await c.env.DB.prepare(
+      'UPDATE users SET name = ?, birthday = ?, avatar_key = ?, avatar_data = ? WHERE uuid = ?'
+    ).bind(
+      String(name).trim(),
+      birthday ? String(birthday).trim() : null,
+      avatarKey,
+      avatar_data === undefined ? activeSession.user.avatar_data : null,
+      activeSession.user.uuid
+    ).run();
+
+    const updatedUser: any = await c.env.DB.prepare(
+      'SELECT uuid, user_id, username, name, status, cookie_expiry_days, birthday, avatar_data, avatar_key FROM users WHERE uuid = ?'
+    ).bind(activeSession.user.uuid).first();
+
+    return c.json({
+      success: true,
+      user: {
+        uuid: updatedUser.uuid,
+        username: updatedUser.username,
+        name: updatedUser.name,
+        birthday: updatedUser.birthday || null,
+        avatar_url: buildAvatarUrl(c, updatedUser.uuid, updatedUser.avatar_key, updatedUser.avatar_data),
+      }
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Unable to update profile' }, 400);
+  }
 });
 
 app.get('/api/user/sessions', async (c) => {
@@ -653,13 +969,7 @@ app.get('/api/github/callback', async (c) => {
       userToAuth = user;
     }
 
-    const payload = {
-      uuid: userToAuth.uuid,
-      user_id: userToAuth.user_id,
-      name: userToAuth.name,
-      username: userToAuth.username,
-      status: userToAuth.status
-    };
+    const payload = buildTokenPayload(c, userToAuth);
     let tokenPayload: any = payload;
     if (userToAuth.uuid !== 'admin') {
       const sessionId = crypto.randomUUID();
@@ -671,7 +981,7 @@ app.get('/api/github/callback', async (c) => {
         expiresAt,
         statePayload.action === 'sso_login' ? statePayload.app_id : 'auth-center'
       );
-      tokenPayload = { ...payload, session_id: sessionId };
+      tokenPayload = buildTokenPayload(c, userToAuth, sessionId);
     }
 
     const jwtToken = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
@@ -860,6 +1170,48 @@ app.delete('/api/passkey/:uuid/:id', async (c) => {
   } catch (e) { return c.json({ error: 'Unauthorized' }, 401); }
 });
 
+app.get('/api/passkey/admin/list', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  const token = authHeader?.split(' ')[1] || '';
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
+    const { results } = await c.env.DB.prepare('SELECT id, name, created_at FROM passkeys WHERE uuid = ?').bind('admin').all();
+    return c.json(results);
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+});
+
+app.put('/api/passkey/admin/:id', async (c) => {
+  const pid = c.req.param('id');
+  const { name } = await c.req.json();
+  const authHeader = c.req.header('Authorization');
+  const token = authHeader?.split(' ')[1] || '';
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
+    await c.env.DB.prepare('UPDATE passkeys SET name = ? WHERE id = ? AND uuid = ?').bind(name, pid, 'admin').run();
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+});
+
+app.delete('/api/passkey/admin/:id', async (c) => {
+  const pid = c.req.param('id');
+  const authHeader = c.req.header('Authorization');
+  const token = authHeader?.split(' ')[1] || '';
+  try {
+    const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (payload.action !== 'bind' || payload.uuid !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
+    await c.env.DB.prepare('DELETE FROM passkeys WHERE id = ? AND uuid = ?').bind(pid, 'admin').run();
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+});
+
 app.get('/api/passkey/generate-authentication-options', async (c) => {
   const rpID = new URL(c.req.url).hostname;
   const options = await generateAuthenticationOptions({
@@ -932,19 +1284,13 @@ app.post('/api/passkey/verify-authentication', async (c) => {
         }
       }
 
-      const payload = {
-        uuid: userToAuth.uuid,
-        user_id: userToAuth.user_id,
-        name: userToAuth.name,
-        username: userToAuth.username,
-        status: userToAuth.status
-      };
+      const payload = buildTokenPayload(c, userToAuth);
       let tokenPayload: any = payload;
       if (userToAuth.uuid !== 'admin') {
         const sessionId = crypto.randomUUID();
         const expiresAt = new Date(Date.now() + userToAuth.cookie_expiry_days * 86400 * 1000).toISOString();
         await persistUserSession(c, userToAuth, sessionId, expiresAt, appId || 'auth-center');
-        tokenPayload = { ...payload, session_id: sessionId };
+        tokenPayload = buildTokenPayload(c, userToAuth, sessionId);
       }
 
       const jwtToken = await generateJWT(tokenPayload, c.env.JWT_SECRET, userToAuth.cookie_expiry_days);
@@ -992,35 +1338,116 @@ app.post('/admin/bind-token', async (c) => {
   return c.json({ success: true, bind_token: bindToken });
 });
 
-// Users CRUD
-app.get('/admin/users', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT user_id, uuid, username, name, status, cookie_expiry_days, password_plain, created_at, github_id FROM users').all();
+app.get('/admin/register-codes', async (c) => {
+  const { results } = await c.env.DB.prepare(`
+    SELECT code, template_name, config_json, status, used_by_uuid, used_by_username, used_at, created_at
+    FROM register_codes
+    ORDER BY created_at DESC
+  `).all();
   return c.json(results);
 });
 
+app.post('/admin/register-codes/batch', async (c) => {
+  const body = await c.req.json();
+  const count = Math.max(1, Math.min(500, Number(body?.count) || 1));
+  const templateName = String(body?.template_name || '').trim() || null;
+  const config = parseRegisterCodeConfig(body);
+  const configJson = JSON.stringify(config);
+  const generatedCodes: string[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const code = crypto.randomUUID();
+    await c.env.DB.prepare(`
+      INSERT INTO register_codes (code, template_name, config_json, status)
+      VALUES (?, ?, ?, 'unused')
+    `).bind(code, templateName, configJson).run();
+    generatedCodes.push(code);
+  }
+
+  return c.json({ success: true, codes: generatedCodes });
+});
+
+app.post('/admin/register-codes/bulk-action', async (c) => {
+  const { codes, action } = await c.req.json();
+  const list = Array.isArray(codes) ? codes.map((code) => String(code)).filter(Boolean) : [];
+  if (!list.length) return c.json({ error: 'No register codes selected' }, 400);
+
+  const placeholders = list.map(() => '?').join(', ');
+
+  if (action === 'delete') {
+    await c.env.DB.prepare(`DELETE FROM register_codes WHERE code IN (${placeholders})`).bind(...list).run();
+    return c.json({ success: true, action, count: list.length });
+  }
+
+  if (action === 'pause') {
+    await c.env.DB.prepare(`
+      UPDATE register_codes
+      SET status = 'pause'
+      WHERE code IN (${placeholders}) AND status = 'unused'
+    `).bind(...list).run();
+    return c.json({ success: true, action, count: list.length });
+  }
+
+  if (action === 'continue') {
+    await c.env.DB.prepare(`
+      UPDATE register_codes
+      SET status = 'unused'
+      WHERE code IN (${placeholders}) AND status = 'pause'
+    `).bind(...list).run();
+    return c.json({ success: true, action, count: list.length });
+  }
+
+  return c.json({ error: 'Unsupported action' }, 400);
+});
+
+// Users CRUD
+app.get('/admin/users', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT user_id, uuid, username, name, status, cookie_expiry_days, password_plain, created_at, github_id, birthday, avatar_data, avatar_key FROM users'
+  ).all();
+  return c.json((results || []).map((user: any) => toUserSummary(c, user)));
+});
+
 app.post('/admin/users', async (c) => {
-  const { username, name, password, cookie_expiry_days = 7 } = await c.req.json();
+  const { username, name, password, cookie_expiry_days = 7, birthday = null, avatar_data = null } = await c.req.json();
   const uuid = crypto.randomUUID();
   const salt = generateSalt();
   const hash = await hashPassword(password, salt);
+  let avatarKey: string | null = null;
 
   try {
+    avatarKey = await resolveAvatarKeyUpdate(c, uuid, avatar_data, null);
     await c.env.DB.prepare(
-      'INSERT INTO users (uuid, username, name, password_hash, password_salt, password_plain, cookie_expiry_days) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(uuid, username, name, hash, salt, password, cookie_expiry_days).run();
+      'INSERT INTO users (uuid, username, name, password_hash, password_salt, password_plain, cookie_expiry_days, birthday, avatar_data, avatar_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid, username, name, hash, salt, password, cookie_expiry_days, birthday, null, avatarKey).run();
     return c.json({ success: true, uuid });
   } catch (e: any) {
+    await deleteAvatarIfPresent(c, avatarKey);
     return c.json({ error: e.message }, 400);
   }
 });
 
 app.put('/admin/users/:uuid', async (c) => {
   const uuid = c.req.param('uuid');
-  const { name, username, cookie_expiry_days } = await c.req.json();
+  const { name, username, cookie_expiry_days, birthday, avatar_data } = await c.req.json();
   try {
+    const currentUser: any = await c.env.DB.prepare(
+      'SELECT avatar_key, avatar_data, birthday FROM users WHERE uuid = ?'
+    ).bind(uuid).first();
+    if (!currentUser) return c.json({ error: 'User not found' }, 404);
+
+    const avatarKey = await resolveAvatarKeyUpdate(c, uuid, avatar_data, currentUser.avatar_key);
     await c.env.DB.prepare(
-      'UPDATE users SET name = ?, username = ?, cookie_expiry_days = ? WHERE uuid = ?'
-    ).bind(name, username, cookie_expiry_days, uuid).run();
+      'UPDATE users SET name = ?, username = ?, cookie_expiry_days = ?, birthday = ?, avatar_key = ?, avatar_data = ? WHERE uuid = ?'
+    ).bind(
+      name,
+      username,
+      cookie_expiry_days,
+      birthday === undefined ? currentUser.birthday : (birthday || null),
+      avatarKey,
+      avatar_data === undefined ? currentUser.avatar_data : null,
+      uuid
+    ).run();
     return c.json({ success: true });
   } catch (e: any) {
     return c.json({ error: e.message }, 400);
@@ -1040,6 +1467,8 @@ app.put('/admin/users/:uuid/password', async (c) => {
 
 app.delete('/admin/users/:uuid', async (c) => {
   const uuid = c.req.param('uuid');
+  const user: any = await c.env.DB.prepare('SELECT avatar_key FROM users WHERE uuid = ?').bind(uuid).first();
+  await deleteAvatarIfPresent(c, user?.avatar_key);
   await c.env.DB.prepare('DELETE FROM users WHERE uuid = ?').bind(uuid).run();
   await c.env.DB.prepare('DELETE FROM passkeys WHERE uuid = ?').bind(uuid).run();
   return c.json({ success: true });

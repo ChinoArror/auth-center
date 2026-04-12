@@ -547,3 +547,23 @@ await fetch('https://accounts.aryuki.com/api/logout', {
 - 接口契约文档自动化
 - 前端组件进一步拆分
 - 大包按路由拆包优化
+## 2026-04-13 更新说明
+
+- 用户资料编辑表单已从 `/{uuid}` 首页移到独立页面 `/{uuid}/edit`
+- `/{uuid}` 现在只保留资料摘要和各功能入口，不再承载 Profile Details 编辑表单
+- 新页面 `/{uuid}/edit` 用于修改 Full Name、Birthday、Avatar
+- 新上传头像写入 R2 bucket `auth-center-save`
+- 头像对象路径格式为 `Avatar/<uuid>/<timestamp>.<ext>`
+- 新增头像访问接口：`GET /api/avatar/:uuid`
+- 新增资料更新接口：`PUT /api/user/profile`
+- 登录 JWT 与用户会话返回中可包含可选字段 `avatar_url`
+- admin 用户资料页继续支持修改头像与生日
+- register code 管理页状态只在状态区域显示，三点菜单点击空白处会自动关闭
+
+增量升级脚本：
+
+```bash
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-user-sessions.sql
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-register-codes.sql
+npx wrangler d1 execute auth-center-db --remote --file=./migrate-user-avatar-r2.sql
+```

@@ -10,6 +10,8 @@ export type ActiveUserSession = {
   uuid: string;
   username: string;
   name: string;
+  birthday?: string | null;
+  avatar_url?: string | null;
   exp: number;
   session?: {
     session_id: string;
